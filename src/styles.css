@@ -1,9 +1,9 @@
-@import url("https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/lxgwwenkaimono-regular.css");
+@import url("https://fontsapi.zeoseven.com/292/main/result.css");
 
 :root {
   color: #1c1c1c;
   background: #f7f4ed;
-  font-family: "LXGW WenKai Mono", ui-sans-serif, system-ui, sans-serif;
+  font-family: "LXGW WenKai", ui-sans-serif, system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;

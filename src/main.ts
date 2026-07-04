@@ -821,7 +821,7 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
 }
 
 function cardFont(size: number): string {
-  return `${size}px "LXGW WenKai Mono", ui-sans-serif, system-ui`;
+  return `${size}px "LXGW WenKai", ui-sans-serif, system-ui`;
 }
 
 function drawSoftPill(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {

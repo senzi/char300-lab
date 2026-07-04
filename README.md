@@ -71,7 +71,7 @@ npm run preview
 网页版字体说明：
 
 - live demo 不依赖仓库里的 `docs/LXGWWenKaiMono-Regular.ttf`。
-- 页面会通过 jsDelivr 加载 `lxgw-wenkai-webfont@1.7.0` 的霞鹜文楷等宽 WebFont。
+- 页面会通过 ZeoSeven CDN 加载霞鹜文楷 Regular WebFont：`https://fontsapi.zeoseven.com/292/main/result.css`。
 - 如果 CDN 字体加载失败，浏览器会自动回退到 `ui-sans-serif, system-ui, sans-serif`。
 - 因此 Cloudflare Pages 不需要提交 20MB+ 的字体文件，也不会因为 `docs/` 被忽略而构建失败。
 
