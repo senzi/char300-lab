@@ -12,6 +12,10 @@ const storageNoticeKey = "zhuzi-storage-notice-dismissed-v1";
 
 type View = "write" | "feed";
 type DetailMode = "writing" | "version";
+type CardChip =
+  | { kind: "diff"; label: string; inserted: number; deleted: number; width: number }
+  | { kind: "plain"; label: string; value: string; width: number };
+type PositionedCardChip = CardChip & { x: number; y: number };
 
 let state: AppState = loadState();
 let view: View = "write";
@@ -779,7 +783,17 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   const visibleLines = wrapTextPreservingBreaks(measureCtx, last.content || "空白版本", cardW - 96).slice(0, 14);
   const contentEndY = contentStartY + Math.max(visibleLines.length - 1, 0) * lineHeight;
   const chipY = contentEndY + 58;
-  const signatureY = chipY + 104;
+  const chipLayout = layoutCardChips(
+    [
+      createDiffCardChip(measureCtx, "文字", textInsertCount(summary), textDeleteCount(summary)),
+      createDiffCardChip(measureCtx, "标点", summary.punctuation.insert, summary.punctuation.delete),
+      createPlainCardChip(measureCtx, "迭代", String(entry.versions.length))
+    ],
+    cardInnerX,
+    chipY,
+    cardW - 96
+  );
+  const signatureY = chipY + chipLayout.height + 50;
   const cardH = Math.max(620, signatureY + 56 - cardY);
   const cardHeight = cardY + cardH + 56;
   canvas.width = cardWidth * scale;
@@ -822,15 +836,7 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
     ctx.fillText(line, cardInnerX, contentStartY + index * lineHeight);
   });
 
-  drawDiffChip(ctx, cardInnerX, chipY, "文字", textInsertCount(summary), textDeleteCount(summary));
-  drawDiffChip(ctx, cardInnerX + 226, chipY, "标点", summary.punctuation.insert, summary.punctuation.delete);
-  drawSoftPill(ctx, cardInnerX + 452, chipY, 138, 54);
-  ctx.fillStyle = "#5f5f5d";
-  ctx.font = cardFont(24);
-  ctx.fillText("迭代", cardInnerX + 474, chipY + 35);
-  ctx.fillStyle = "#1c1c1c";
-  ctx.font = cardFont(28);
-  ctx.fillText(String(entry.versions.length), cardInnerX + 532, chipY + 36);
+  chipLayout.chips.forEach((chip) => drawCardChip(ctx, chip));
 
   ctx.fillStyle = "rgba(28,28,28,0.52)";
   ctx.font = cardFont(24);
@@ -854,16 +860,73 @@ function drawSoftPill(ctx: CanvasRenderingContext2D, x: number, y: number, width
   ctx.stroke();
 }
 
-function drawDiffChip(ctx: CanvasRenderingContext2D, x: number, y: number, label: string, inserted: number, deleted: number): void {
-  drawSoftPill(ctx, x, y, 202, 54);
+function createDiffCardChip(ctx: CanvasRenderingContext2D, label: string, inserted: number, deleted: number): CardChip {
+  ctx.font = cardFont(24);
+  const labelWidth = ctx.measureText(label).width;
+  ctx.font = cardFont(28);
+  const insertedWidth = ctx.measureText(`+${inserted}`).width;
+  const deletedWidth = ctx.measureText(`-${deleted}`).width;
+  const width = Math.ceil(40 + labelWidth + 18 + insertedWidth + 16 + deletedWidth + 20);
+  return { kind: "diff", label, inserted, deleted, width: Math.max(202, width) };
+}
+
+function createPlainCardChip(ctx: CanvasRenderingContext2D, label: string, value: string): CardChip {
+  ctx.font = cardFont(24);
+  const labelWidth = ctx.measureText(label).width;
+  ctx.font = cardFont(28);
+  const valueWidth = ctx.measureText(value).width;
+  const width = Math.ceil(40 + labelWidth + 18 + valueWidth + 20);
+  return { kind: "plain", label, value, width: Math.max(138, width) };
+}
+
+function layoutCardChips(
+  chips: CardChip[],
+  startX: number,
+  startY: number,
+  maxWidth: number
+): { chips: PositionedCardChip[]; height: number } {
+  const gapX = 24;
+  const gapY = 18;
+  const chipHeight = 54;
+  const positioned: PositionedCardChip[] = [];
+  let x = startX;
+  let y = startY;
+
+  for (const chip of chips) {
+    const width = Math.min(chip.width, maxWidth);
+    if (x > startX && x + width > startX + maxWidth) {
+      x = startX;
+      y += chipHeight + gapY;
+    }
+
+    positioned.push({ ...chip, width, x, y });
+    x += width + gapX;
+  }
+
+  return {
+    chips: positioned,
+    height: positioned.length === 0 ? 0 : positioned.at(-1)!.y - startY + chipHeight
+  };
+}
+
+function drawCardChip(ctx: CanvasRenderingContext2D, chip: PositionedCardChip): void {
+  drawSoftPill(ctx, chip.x, chip.y, chip.width, 54);
   ctx.font = cardFont(24);
   ctx.fillStyle = "#5f5f5d";
-  ctx.fillText(label, x + 20, y + 35);
+  ctx.fillText(chip.label, chip.x + 20, chip.y + 35);
+  const valueX = chip.x + 20 + ctx.measureText(chip.label).width + 18;
   ctx.font = cardFont(28);
+  if (chip.kind === "plain") {
+    ctx.fillStyle = "#1c1c1c";
+    ctx.fillText(chip.value, valueX, chip.y + 36);
+    return;
+  }
+
+  const insertedText = `+${chip.inserted}`;
   ctx.fillStyle = "#287a46";
-  ctx.fillText(`+${inserted}`, x + 78, y + 36);
+  ctx.fillText(insertedText, valueX, chip.y + 36);
   ctx.fillStyle = "#9b3428";
-  ctx.fillText(`-${deleted}`, x + 132, y + 36);
+  ctx.fillText(`-${chip.deleted}`, valueX + ctx.measureText(insertedText).width + 16, chip.y + 36);
 }
 
 function wrapTextPreservingBreaks(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
