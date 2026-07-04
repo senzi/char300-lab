@@ -68,6 +68,13 @@ npm run preview
 
 这种方式会先生成 `dist/`，再用本地预览服务器访问构建后的网页版本。
 
+网页版字体说明：
+
+- live demo 不依赖仓库里的 `docs/LXGWWenKaiMono-Regular.ttf`。
+- 页面会通过 jsDelivr 加载 `lxgw-wenkai-webfont@1.7.0` 的霞鹜文楷等宽 WebFont。
+- 如果 CDN 字体加载失败，浏览器会自动回退到 `ui-sans-serif, system-ui, sans-serif`。
+- 因此 Cloudflare Pages 不需要提交 20MB+ 的字体文件，也不会因为 `docs/` 被忽略而构建失败。
+
 ### 3. 运行桌面开发版
 
 需要本机安装 Rust 和平台相关构建工具。
