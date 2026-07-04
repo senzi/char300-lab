@@ -8,6 +8,7 @@ import { ensureTodayEntry, getActiveEntry, getFinalVersion, loadState, persistSt
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
+const storageNoticeKey = "zhuzi-storage-notice-dismissed-v1";
 
 type View = "write" | "feed";
 type DetailMode = "writing" | "version";
@@ -104,6 +105,21 @@ app.innerHTML = `
       </aside>
     </section>
   </main>
+  <div class="notice-backdrop hidden" id="storageNotice" role="dialog" aria-modal="true" aria-labelledby="storageNoticeTitle">
+    <section class="notice-dialog">
+      <p class="panel-kicker">Local Storage</p>
+      <h2 id="storageNoticeTitle">写作内容只保存在当前浏览器</h2>
+      <p>网页版不会把文章保存到项目目录或云端。数据保存在当前浏览器、当前访问地址的 localStorage 里；换浏览器、换端口、清理站点数据或使用无痕模式，都可能导致内容不可见或丢失。</p>
+      <p>认真写作前，建议定期使用“导出 → 完整数据 ZIP”备份。</p>
+      <label class="notice-check">
+        <input id="storageNoticeDontShow" type="checkbox" />
+        <span>不再提醒</span>
+      </label>
+      <div class="notice-actions">
+        <button class="button primary" id="storageNoticeClose" type="button">我知道了</button>
+      </div>
+    </section>
+  </div>
 `;
 
 const dateTitle = getElement<HTMLElement>("dateTitle");
@@ -133,6 +149,9 @@ const entryCount = getElement<HTMLElement>("entryCount");
 const habitStats = getElement<HTMLElement>("habitStats");
 const calendarList = getElement<HTMLElement>("calendarList");
 const diffSummary = getElement<HTMLElement>("diffSummary");
+const storageNotice = getElement<HTMLElement>("storageNotice");
+const storageNoticeDontShow = getElement<HTMLInputElement>("storageNoticeDontShow");
+const storageNoticeClose = getElement<HTMLButtonElement>("storageNoticeClose");
 
 editor.addEventListener("input", () => {
   state = updateDraft(state, editor.value);
@@ -203,6 +222,13 @@ document.addEventListener("click", (event) => {
   }
 });
 
+storageNoticeClose.addEventListener("click", () => {
+  if (storageNoticeDontShow.checked) {
+    localStorage.setItem(storageNoticeKey, "true");
+  }
+  storageNotice.classList.add("hidden");
+});
+
 writeViewButton.addEventListener("click", () => {
   view = "write";
   render();
@@ -214,6 +240,7 @@ feedViewButton.addEventListener("click", () => {
 });
 
 render();
+showStorageNoticeIfNeeded();
 
 function render(): void {
   const activeEntry = getActiveEntry(state);
@@ -261,6 +288,14 @@ function render(): void {
 function closeExportMenu(): void {
   exportMenu.classList.add("hidden");
   exportButton.setAttribute("aria-expanded", "false");
+}
+
+function showStorageNoticeIfNeeded(): void {
+  if (localStorage.getItem(storageNoticeKey) === "true") {
+    return;
+  }
+
+  storageNotice.classList.remove("hidden");
 }
 
 function renderHabitStats(): void {

@@ -191,6 +191,49 @@ h2 {
     rgba(0, 0, 0, 0.05) 0 1px 2px;
 }
 
+.notice-backdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(28, 28, 28, 0.18);
+}
+
+.notice-dialog {
+  width: min(520px, 100%);
+  border: 1px solid #eceae4;
+  border-radius: 12px;
+  padding: 22px;
+  background: #f7f4ed;
+  box-shadow: rgba(0, 0, 0, 0.1) 0 4px 12px;
+}
+
+.notice-dialog h2 {
+  margin-bottom: 14px;
+}
+
+.notice-dialog p {
+  margin: 0 0 12px;
+  color: rgba(28, 28, 28, 0.82);
+  line-height: 1.6;
+}
+
+.notice-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  color: #5f5f5d;
+}
+
+.notice-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr) 310px;
