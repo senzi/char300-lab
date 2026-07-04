@@ -231,7 +231,25 @@ h2 {
 .notice-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
   margin-top: 18px;
+}
+
+.inline-status {
+  border: 1px solid #eceae4;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(28, 28, 28, 0.03);
+}
+
+.inline-status.error {
+  border-color: rgba(155, 52, 40, 0.28);
+  color: #9b3428;
+  background: rgba(155, 52, 40, 0.08);
+}
+
+.inline-status.info {
+  color: #5f5f5d;
 }
 
 .workspace {

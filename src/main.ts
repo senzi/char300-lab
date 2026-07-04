@@ -17,6 +17,7 @@ let state: AppState = loadState();
 let view: View = "write";
 let detailMode: DetailMode = "writing";
 let selectedVersionId: string | null = getActiveEntry(state).current_version_id;
+let pendingImportFile: File | null = null;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -120,6 +121,18 @@ app.innerHTML = `
       </div>
     </section>
   </div>
+  <div class="notice-backdrop hidden" id="importConfirm" role="dialog" aria-modal="true" aria-labelledby="importConfirmTitle">
+    <section class="notice-dialog">
+      <p class="panel-kicker">Import</p>
+      <h2 id="importConfirmTitle">导入 ZIP 会替换当前本地档案</h2>
+      <p id="importConfirmText">导入会用备份内容覆盖当前环境中的每日记录。继续前，请确认当前内容已经导出备份。</p>
+      <p class="inline-status hidden" id="importStatus"></p>
+      <div class="notice-actions">
+        <button class="button ghost" id="importCancelButton" type="button">取消</button>
+        <button class="button primary" id="importConfirmButton" type="button">确认导入</button>
+      </div>
+    </section>
+  </div>
 `;
 
 const dateTitle = getElement<HTMLElement>("dateTitle");
@@ -152,6 +165,10 @@ const diffSummary = getElement<HTMLElement>("diffSummary");
 const storageNotice = getElement<HTMLElement>("storageNotice");
 const storageNoticeDontShow = getElement<HTMLInputElement>("storageNoticeDontShow");
 const storageNoticeClose = getElement<HTMLButtonElement>("storageNoticeClose");
+const importConfirm = getElement<HTMLElement>("importConfirm");
+const importStatus = getElement<HTMLElement>("importStatus");
+const importCancelButton = getElement<HTMLButtonElement>("importCancelButton");
+const importConfirmButton = getElement<HTMLButtonElement>("importConfirmButton");
 
 editor.addEventListener("input", () => {
   state = updateDraft(state, editor.value);
@@ -211,7 +228,8 @@ importZipInput.addEventListener("change", () => {
   const file = importZipInput.files?.[0];
   importZipInput.value = "";
   if (file) {
-    void importZipBackup(file);
+    pendingImportFile = file;
+    showImportConfirm();
   }
 });
 
@@ -227,6 +245,17 @@ storageNoticeClose.addEventListener("click", () => {
     localStorage.setItem(storageNoticeKey, "true");
   }
   storageNotice.classList.add("hidden");
+});
+
+importCancelButton.addEventListener("click", () => {
+  pendingImportFile = null;
+  importConfirm.classList.add("hidden");
+});
+
+importConfirmButton.addEventListener("click", () => {
+  if (pendingImportFile) {
+    void importZipBackup(pendingImportFile);
+  }
 });
 
 writeViewButton.addEventListener("click", () => {
@@ -296,6 +325,13 @@ function showStorageNoticeIfNeeded(): void {
   }
 
   storageNotice.classList.remove("hidden");
+}
+
+function showImportConfirm(): void {
+  importStatus.classList.add("hidden");
+  importStatus.textContent = "";
+  importConfirmButton.disabled = false;
+  importConfirm.classList.remove("hidden");
 }
 
 function renderHabitStats(): void {
@@ -499,35 +535,44 @@ async function exportZipBackup(): Promise<void> {
 }
 
 async function importZipBackup(file: File): Promise<void> {
-  const ok = confirm("导入 ZIP 会用备份内容替换当前本地档案。继续导入吗？");
-  if (!ok) {
-    return;
-  }
-
+  importStatus.classList.add("hidden");
+  importStatus.textContent = "";
+  importConfirmButton.disabled = true;
   try {
     const zip = await JSZip.loadAsync(file);
     const dataFile = zip.file("zhuzi-data.json") ?? zip.file("char300-lab-data.json");
     if (!dataFile) {
-      alert("没有找到逐字备份数据文件。");
+      showImportStatus("没有找到逐字备份数据文件。", "error");
+      importConfirmButton.disabled = false;
       return;
     }
 
     const raw = await dataFile.async("string");
     const parsed = JSON.parse(raw) as { state?: AppState };
     if (!parsed.state || !Array.isArray(parsed.state.entries) || typeof parsed.state.active_entry_id !== "string") {
-      alert("备份数据格式不正确。");
+      showImportStatus("备份数据格式不正确。", "error");
+      importConfirmButton.disabled = false;
       return;
     }
 
     state = parsed.state;
     persistState(state);
+    pendingImportFile = null;
     selectedVersionId = getActiveEntry(state).current_version_id;
     detailMode = "writing";
     view = "write";
+    importConfirm.classList.add("hidden");
+    importConfirmButton.disabled = false;
     render();
   } catch {
-    alert("导入失败，请确认 ZIP 文件来自逐字。");
+    showImportStatus("导入失败，请确认 ZIP 文件来自逐字。", "error");
+    importConfirmButton.disabled = false;
   }
+}
+
+function showImportStatus(message: string, tone: "error" | "info"): void {
+  importStatus.textContent = message;
+  importStatus.className = `inline-status ${tone}`;
 }
 
 function renderEntryMarkdown(entry: DailyEntry): string {
