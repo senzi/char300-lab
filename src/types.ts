@@ -1,4 +1,4 @@
-export type TokenKind = "han" | "number" | "punctuation";
+export type TokenKind = "han" | "latin" | "number" | "punctuation";
 
 export type DiffOp = "KEEP" | "INSERT" | "DELETE";
 
@@ -12,6 +12,7 @@ export interface TokenStats {
   punctuation_units: number;
   total_units: number;
   han_units: number;
+  latin_units: number;
   number_units: number;
 }
 
@@ -26,6 +27,10 @@ export interface DiffSummary {
     delete: number;
   };
   number: {
+    insert: number;
+    delete: number;
+  };
+  latin: {
     insert: number;
     delete: number;
   };

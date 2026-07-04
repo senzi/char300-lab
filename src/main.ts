@@ -1,10 +1,10 @@
 import "./styles.css";
 import JSZip from "jszip";
 import logoUrl from "./assets/logo.svg";
-import { summarizeDiff } from "./diff";
+import { diffTexts, summarizeDiff } from "./diff";
 import { getTokenStats, tokenize } from "./tokenizer";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
-import { ensureTodayEntry, getActiveEntry, getFinalVersion, loadState, persistState, saveVersion, switchEntry, todayKey, updateDraft } from "./store";
+import { ensureTodayEntry, getActiveEntry, getFinalVersion, loadState, normalizeState, persistState, saveVersion, switchEntry, todayKey, updateDraft } from "./store";
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
@@ -303,7 +303,7 @@ function render(): void {
     <div><strong>${activeStats.text_units}</strong><span>文本单元</span></div>
     <div><strong>${activeStats.punctuation_units}</strong><span>标点</span></div>
     <div><strong>${activeStats.han_units}</strong><span>汉字</span></div>
-    <div><strong>${activeStats.number_units}</strong><span>数字Token</span></div>
+    <div><strong>${activeStats.latin_units + activeStats.number_units}</strong><span>字母/数字</span></div>
   `;
 
   renderHabitStats();
@@ -355,7 +355,7 @@ function renderCalendarList(): void {
       const isActive = entry?.entry_id === active.entry_id;
       const finalVersion = entry ? getFinalVersion(entry) : null;
       const classes = ["calendar-day", row.written ? "written" : "missed", isActive ? "active" : ""].join(" ");
-      const meta = row.written ? `${finalVersion?.token_stats.total_units ?? 0}/300 · ${entry?.versions.length ?? 0}版` : "缺席";
+      const meta = row.written ? `${finalVersion ? getTokenStats(finalVersion.content).total_units : 0}/300 · ${entry?.versions.length ?? 0}版` : "缺席";
       const disabled = entry ? "" : "disabled";
       return `
         <button class="${classes}" data-entry-id="${entry?.entry_id ?? ""}" type="button" ${disabled}>
@@ -395,14 +395,16 @@ function renderTimeline(entry: DailyEntry): void {
       <span class="version-stats">当前草稿</span>
     </button>`,
     ...entry.versions.map((version, index) => {
-      const inserted = version.diff_from_previous.filter((unit) => unit.op === "INSERT").length;
-      const deleted = version.diff_from_previous.filter((unit) => unit.op === "DELETE").length;
+      const versionDiff = getVersionDiff(entry, index);
+      const inserted = versionDiff.filter((unit) => unit.op === "INSERT").length;
+      const deleted = versionDiff.filter((unit) => unit.op === "DELETE").length;
       const active = detailMode === "version" && version.version_id === selectedVersionId ? " active" : "";
+      const stats = getTokenStats(version.content);
       return `
         <button class="version-item${active}" data-version-id="${version.version_id}" type="button">
           <span class="version-index">V${index + 1}</span>
           <span class="version-time">${formatDateTime(version.created_at)}</span>
-          <span class="version-stats">${version.token_stats.total_units}/300 · ${renderInlineDelta(inserted, deleted)}</span>
+          <span class="version-stats">${stats.total_units}/300 · ${renderInlineDelta(inserted, deleted)}</span>
         </button>
       `;
     })
@@ -429,7 +431,8 @@ function renderReader(entry: DailyEntry): void {
     return;
   }
 
-  const visibleUnits = selected.diff_from_previous.filter((unit) => unit.op !== "DELETE");
+  const selectedIndex = entry.versions.findIndex((version) => version.version_id === selected.version_id);
+  const visibleUnits = getVersionDiff(entry, selectedIndex).filter((unit) => unit.op !== "DELETE");
   reader.innerHTML = `
     <div class="reader-meta">
       <span>${selected.is_initial ? "初始版本" : "相邻版本 Diff"}</span>
@@ -555,7 +558,7 @@ async function importZipBackup(file: File): Promise<void> {
       return;
     }
 
-    state = parsed.state;
+    state = normalizeState(parsed.state);
     persistState(state);
     pendingImportFile = null;
     selectedVersionId = getActiveEntry(state).current_version_id;
@@ -586,18 +589,18 @@ function renderEntryMarkdown(entry: DailyEntry): string {
   const lines = [
     `## ${entry.date_key}`,
     "",
-    `${last.token_stats.total_units}/300`,
+    `${getTokenStats(last.content).total_units}/300`,
     "",
     last.content || "空白版本",
     "",
-    `文字 +${summary.han.insert + summary.number.insert} -${summary.han.delete + summary.number.delete} · 标点 +${summary.punctuation.insert} -${summary.punctuation.delete} · 迭代 ${entry.versions.length}`,
+    `文字 +${textInsertCount(summary)} -${textDeleteCount(summary)} · 标点 +${summary.punctuation.insert} -${summary.punctuation.delete} · 迭代 ${entry.versions.length}`,
     "",
     "### 版本",
     ""
   ];
 
   entry.versions.forEach((version, index) => {
-    lines.push(`- V${index + 1} · ${formatDateTime(version.created_at)} · ${version.token_stats.total_units}/300`);
+    lines.push(`- V${index + 1} · ${formatDateTime(version.created_at)} · ${getTokenStats(version.content).total_units}/300`);
   });
 
   lines.push("");
@@ -616,10 +619,18 @@ function renderEntrySummaryChips(entry: DailyEntry): string {
 
 function renderSummaryChips(summary: ReturnType<typeof summarizeDiff>, iterations: number): string {
   return `
-    <span><b>文字</b> ${renderInlineDelta(summary.han.insert + summary.number.insert, summary.han.delete + summary.number.delete)}</span>
+    <span><b>文字</b> ${renderInlineDelta(textInsertCount(summary), textDeleteCount(summary))}</span>
     <span><b>标点</b> ${renderInlineDelta(summary.punctuation.insert, summary.punctuation.delete)}</span>
     <span><b>迭代</b> ${iterations}</span>
   `;
+}
+
+function textInsertCount(summary: ReturnType<typeof summarizeDiff>): number {
+  return summary.han.insert + summary.latin.insert + summary.number.insert;
+}
+
+function textDeleteCount(summary: ReturnType<typeof summarizeDiff>): number {
+  return summary.han.delete + summary.latin.delete + summary.number.delete;
 }
 
 function renderInlineDelta(inserted: number, deleted: number): string {
@@ -728,6 +739,16 @@ function getSelectedVersion(entry: DailyEntry): Version | null {
   return entry.versions.find((version) => version.version_id === selectedVersionId) ?? entry.versions.at(-1) ?? null;
 }
 
+function getVersionDiff(entry: DailyEntry, versionIndex: number): DiffUnit[] {
+  const version = entry.versions[versionIndex];
+  if (!version) {
+    return [];
+  }
+
+  const previous = entry.versions[versionIndex - 1];
+  return diffTexts(previous?.content ?? "", version.content);
+}
+
 async function exportDailyCard(entry: DailyEntry): Promise<void> {
   const first = entry.versions[0];
   const last = entry.versions.at(-1);
@@ -746,7 +767,8 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   const cardW = cardWidth - cardX * 2;
   const contentStartY = 230;
   const lineHeight = 48;
-  const meterText = `${last.token_stats.total_units} / 300`;
+  const lastStats = getTokenStats(last.content);
+  const meterText = `${lastStats.total_units} / 300`;
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
   if (!measureCtx) {
@@ -800,7 +822,7 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
     ctx.fillText(line, cardInnerX, contentStartY + index * lineHeight);
   });
 
-  drawDiffChip(ctx, cardInnerX, chipY, "文字", summary.han.insert + summary.number.insert, summary.han.delete + summary.number.delete);
+  drawDiffChip(ctx, cardInnerX, chipY, "文字", textInsertCount(summary), textDeleteCount(summary));
   drawDiffChip(ctx, cardInnerX + 226, chipY, "标点", summary.punctuation.insert, summary.punctuation.delete);
   drawSoftPill(ctx, cardInnerX + 452, chipY, 138, 54);
   ctx.fillStyle = "#5f5f5d";

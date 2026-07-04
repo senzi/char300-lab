@@ -55,6 +55,7 @@ export function summarizeDiff(previous: string, current: string): DiffSummary {
   const summary: DiffSummary = {
     han: { insert: 0, delete: 0 },
     number: { insert: 0, delete: 0 },
+    latin: { insert: 0, delete: 0 },
     punctuation: { insert: 0, delete: 0 }
   };
 
@@ -63,7 +64,14 @@ export function summarizeDiff(previous: string, current: string): DiffSummary {
       continue;
     }
 
-    const group = unit.token.kind === "han" ? summary.han : unit.token.kind === "number" ? summary.number : summary.punctuation;
+    const group =
+      unit.token.kind === "han"
+        ? summary.han
+        : unit.token.kind === "latin"
+          ? summary.latin
+          : unit.token.kind === "number"
+            ? summary.number
+            : summary.punctuation;
     if (unit.op === "INSERT") {
       group.insert += 1;
     } else {

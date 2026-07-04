@@ -42,7 +42,9 @@ export function loadState(): AppState {
   const raw = localStorage.getItem(storageKey);
   if (raw) {
     try {
-      return normalizeState(JSON.parse(raw) as AppState);
+      const normalized = normalizeState(JSON.parse(raw) as AppState);
+      persistState(normalized);
+      return normalized;
     } catch {
       return createEmptyState();
     }
@@ -162,7 +164,7 @@ function updateActiveEntry(state: AppState, updater: (entry: DailyEntry) => Dail
   };
 }
 
-function normalizeState(state: AppState): AppState {
+export function normalizeState(state: AppState): AppState {
   const fallback = createEmptyState();
   const entries = sortEntries((state.entries?.length ? state.entries : fallback.entries).map(normalizeEntry));
   const active = entries.find((entry) => entry.entry_id === state.active_entry_id) ?? entries[0];
@@ -175,14 +177,23 @@ function normalizeState(state: AppState): AppState {
 function normalizeEntry(entry: DailyEntry): DailyEntry {
   const createdAt = entry.created_at ?? new Date().toISOString();
   const key = entry.date_key ?? dateKey(new Date(createdAt));
-  return {
+  const base = {
     ...createEntry(key, createdAt),
     ...entry,
     date_key: key,
     optional_title: key,
-    versions: entry.versions ?? [],
     draft: entry.draft ?? entry.lastSavedContent ?? "",
     lastSavedContent: entry.lastSavedContent ?? entry.draft ?? ""
+  };
+  const versions = (entry.versions ?? []).map((version, index, versionsList) => ({
+    ...version,
+    token_stats: getTokenStats(version.content),
+    diff_from_previous: diffTexts(versionsList[index - 1]?.content ?? "", version.content)
+  }));
+
+  return {
+    ...base,
+    versions
   };
 }
 
