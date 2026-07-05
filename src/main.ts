@@ -9,6 +9,7 @@ import { ensureTodayEntry, getActiveEntry, getFinalVersion, loadState, normalize
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
 const storageNoticeKey = "zhuzi-storage-notice-dismissed-v1";
+const writingYearGoalDays = 365;
 
 type View = "write" | "feed";
 type DetailMode = "writing" | "version";
@@ -17,11 +18,14 @@ type CardChip =
   | { kind: "plain"; label: string; value: string; width: number };
 type PositionedCardChip = CardChip & { x: number; y: number };
 
-let state: AppState = loadState();
+let state: AppState = ensureTodayEntry(loadState());
 let view: View = "write";
 let detailMode: DetailMode = "writing";
 let selectedVersionId: string | null = getActiveEntry(state).current_version_id;
 let pendingImportFile: File | null = null;
+let historyEditUnlockedEntryId: string | null = null;
+
+persistState(state);
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -57,58 +61,76 @@ app.innerHTML = `
       <input class="hidden" id="importZipInput" type="file" accept=".zip,application/zip" />
     </header>
 
-    <section class="workspace">
-      <aside class="overview-panel">
-        <div class="panel-head">
-          <div>
-            <p class="panel-kicker">Archive</p>
-            <h2>每日记录</h2>
-          </div>
-          <span class="count-pill" id="entryCount">0</span>
-        </div>
-        <div class="habit-stats" id="habitStats"></div>
-        <div class="calendar-list" id="calendarList"></div>
-      </aside>
+    <div class="modebar">
+      <div class="segmented" role="tablist" aria-label="主视图">
+        <button id="writeViewButton" type="button">写作</button>
+        <button id="feedViewButton" type="button">阅读流</button>
+      </div>
+      <div class="meter" id="meter"></div>
+    </div>
 
-      <section class="main-panel">
-        <div class="modebar">
-          <div class="segmented" role="tablist" aria-label="主视图">
-            <button id="writeViewButton" type="button">写作</button>
-            <button id="feedViewButton" type="button">阅读流</button>
-          </div>
-          <div class="meter" id="meter"></div>
-        </div>
-
-        <section class="write-view" id="writeView">
-          <div class="stats-row" id="statsRow"></div>
-          <textarea id="editor" spellcheck="false" placeholder="写下今天的 300 字。保存后，每一次修改都会成为不可覆盖的版本。"></textarea>
-          <article class="reader hidden" id="reader"></article>
-        </section>
-
-        <section class="feed-view hidden" id="feedView">
-          <div class="feed-toolbar">
+    <section class="writing-workspace" id="writingWorkspace">
+      <section class="workspace">
+        <aside class="overview-panel">
+          <div class="panel-head">
             <div>
-              <p class="panel-kicker">Reading</p>
-              <h2>总阅读</h2>
+              <p class="panel-kicker">Archive</p>
+              <h2>每日记录</h2>
             </div>
-            <span id="feedRange"></span>
+            <span class="count-pill" id="entryCount">0</span>
           </div>
-          <div class="feed-list" id="feedList"></div>
-        </section>
-      </section>
+          <div class="habit-stats" id="habitStats"></div>
+          <div class="calendar-list" id="calendarList"></div>
+        </aside>
 
-      <aside class="side-panel">
-        <div class="panel-head">
-          <div>
-            <p class="panel-kicker">Timeline</p>
-            <h2>版本链</h2>
+        <section class="main-panel">
+          <section class="write-view" id="writeView">
+            <div class="history-edit-notice hidden" id="historyEditNotice">
+              <div>
+                <strong>历史日期已锁定</strong>
+                <span>跨天文章默认只读。确认后可继续修改，并会把新版本标记为“跨天”。</span>
+              </div>
+              <button class="button small" id="unlockHistoryEditButton" type="button">解锁历史草稿</button>
+            </div>
+            <div class="stats-row" id="statsRow"></div>
+            <textarea id="editor" spellcheck="false" placeholder="写下今天的 300 字。保存后，每一次修改都会成为不可覆盖的版本。"></textarea>
+            <article class="reader hidden" id="reader"></article>
+          </section>
+        </section>
+
+        <aside class="side-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Timeline</p>
+              <h2>版本链</h2>
+            </div>
+            <span class="count-pill" id="versionCount">0</span>
           </div>
-          <span class="count-pill" id="versionCount">0</span>
-        </div>
-        <div class="timeline" id="timeline"></div>
-        <div class="diff-summary" id="diffSummary"></div>
-      </aside>
+          <div class="timeline" id="timeline"></div>
+          <div class="diff-summary" id="diffSummary"></div>
+        </aside>
+      </section>
     </section>
+
+    <section class="feed-view hidden" id="feedView">
+      <div class="feed-toolbar">
+        <div>
+          <p class="panel-kicker">Reading</p>
+          <h2>总阅读</h2>
+        </div>
+        <span id="feedRange"></span>
+      </div>
+      <div class="feed-list" id="feedList"></div>
+    </section>
+    <footer class="app-footer">
+      <a href="https://github.com/senzi/char300-lab" target="_blank" rel="noreferrer">Github</a>
+      <span aria-hidden="true">|</span>
+      <span>MIT</span>
+      <span aria-hidden="true">|</span>
+      <span>Vibecoding</span>
+      <span aria-hidden="true">|</span>
+      <a href="https://weibo.com/1401527553/R71bIwAVs" target="_blank" rel="noreferrer">灵感来源</a>
+    </footer>
   </main>
   <div class="notice-backdrop hidden" id="storageNotice" role="dialog" aria-modal="true" aria-labelledby="storageNoticeTitle">
     <section class="notice-dialog">
@@ -154,10 +176,12 @@ const writeViewButton = getElement<HTMLButtonElement>("writeViewButton");
 const feedViewButton = getElement<HTMLButtonElement>("feedViewButton");
 const editor = getElement<HTMLTextAreaElement>("editor");
 const reader = getElement<HTMLElement>("reader");
-const writeView = getElement<HTMLElement>("writeView");
+const writingWorkspace = getElement<HTMLElement>("writingWorkspace");
 const feedView = getElement<HTMLElement>("feedView");
 const feedList = getElement<HTMLElement>("feedList");
 const feedRange = getElement<HTMLElement>("feedRange");
+const historyEditNotice = getElement<HTMLElement>("historyEditNotice");
+const unlockHistoryEditButton = getElement<HTMLButtonElement>("unlockHistoryEditButton");
 const timeline = getElement<HTMLElement>("timeline");
 const meter = getElement<HTMLElement>("meter");
 const statsRow = getElement<HTMLElement>("statsRow");
@@ -175,12 +199,21 @@ const importCancelButton = getElement<HTMLButtonElement>("importCancelButton");
 const importConfirmButton = getElement<HTMLButtonElement>("importConfirmButton");
 
 editor.addEventListener("input", () => {
+  if (!canEditActiveEntry()) {
+    editor.value = getActiveEntry(state).draft;
+    return;
+  }
+
   state = updateDraft(state, editor.value);
   persistState(state);
   render();
 });
 
 saveButton.addEventListener("click", () => {
+  if (!canEditActiveEntry()) {
+    return;
+  }
+
   state = saveVersion(state);
   selectedVersionId = getActiveEntry(state).current_version_id;
   detailMode = "writing";
@@ -192,6 +225,7 @@ todayButton.addEventListener("click", () => {
   state = ensureTodayEntry(state);
   selectedVersionId = getActiveEntry(state).current_version_id;
   detailMode = "writing";
+  historyEditUnlockedEntryId = null;
   view = "write";
   persistState(state);
   render();
@@ -272,6 +306,15 @@ feedViewButton.addEventListener("click", () => {
   render();
 });
 
+unlockHistoryEditButton.addEventListener("click", () => {
+  const activeEntry = getActiveEntry(state);
+  if (!isTodayEntry(activeEntry)) {
+    historyEditUnlockedEntryId = activeEntry.entry_id;
+    render();
+    editor.focus();
+  }
+});
+
 render();
 showStorageNoticeIfNeeded();
 
@@ -282,18 +325,21 @@ function render(): void {
   const activeStats = getTokenStats(activeContent);
   const overLimit = activeStats.total_units > 300;
   const progress = Math.min(activeStats.total_units / 300, 1);
+  const canEdit = canEditActiveEntry();
+  const isHistoricalWriting = !isTodayEntry(activeEntry) && detailMode === "writing";
 
   dateTitle.textContent = formatDisplayDate(activeEntry.date_key);
   editor.value = activeEntry.draft;
   document.body.classList.toggle("over-limit", overLimit);
   writeViewButton.classList.toggle("active", view === "write");
   feedViewButton.classList.toggle("active", view === "feed");
-  writeView.classList.toggle("hidden", view === "feed");
+  writingWorkspace.classList.toggle("hidden", view === "feed");
   feedView.classList.toggle("hidden", view === "write");
   editor.classList.toggle("hidden", detailMode === "version");
   reader.classList.toggle("hidden", detailMode === "writing");
-  editor.disabled = detailMode === "version";
-  saveButton.disabled = detailMode === "version" || activeEntry.draft === activeEntry.lastSavedContent;
+  historyEditNotice.classList.toggle("hidden", !isHistoricalWriting || canEdit);
+  editor.disabled = !canEdit;
+  saveButton.disabled = !canEdit || activeEntry.draft === activeEntry.lastSavedContent;
   exportImageButton.disabled = activeEntry.versions.length === 0;
   exportDayMarkdownButton.disabled = activeEntry.versions.length === 0;
   exportAllMarkdownButton.disabled = !state.entries.some((entry) => entry.versions.length > 0);
@@ -342,7 +388,7 @@ function renderHabitStats(): void {
   const stats = getHabitStats();
   entryCount.textContent = String(stats.writtenDays);
   habitStats.innerHTML = `
-    <div><strong>${stats.writtenDays}</strong><span>写作天数</span></div>
+    <div><strong>${stats.writtenDays} / ${writingYearGoalDays}</strong><span>写作天数</span></div>
     <div><strong>${stats.absentDays}</strong><span>缺席天数</span></div>
     <div><strong>${stats.currentStreak}</strong><span>当前连击</span></div>
     <div><strong>${stats.maxStreak}</strong><span>最大连击</span></div>
@@ -378,6 +424,7 @@ function renderCalendarList(): void {
       state = switchEntry(state, button.dataset.entryId ?? state.active_entry_id);
       selectedVersionId = getActiveEntry(state).current_version_id;
       detailMode = "writing";
+      historyEditUnlockedEntryId = null;
       view = "write";
       persistState(state);
       render();
@@ -404,10 +451,11 @@ function renderTimeline(entry: DailyEntry): void {
       const deleted = versionDiff.filter((unit) => unit.op === "DELETE").length;
       const active = detailMode === "version" && version.version_id === selectedVersionId ? " active" : "";
       const stats = getTokenStats(version.content);
+      const crossDayBadge = isCrossDayVersion(entry, version) ? `<span class="version-badge">跨天</span>` : "";
       return `
         <button class="version-item${active}" data-version-id="${version.version_id}" type="button">
           <span class="version-index">V${index + 1}</span>
-          <span class="version-time">${formatDateTime(version.created_at)}</span>
+          <span class="version-time">${formatDateTime(version.created_at)} ${crossDayBadge}</span>
           <span class="version-stats">${stats.total_units}/300 · ${renderInlineDelta(inserted, deleted)}</span>
         </button>
       `;
@@ -475,10 +523,14 @@ function renderFeed(): void {
       if (!last) {
         return "";
       }
+      const crossDayBadge = isCrossDayVersion(entry, last) ? `<span class="feed-badge">跨天版本</span>` : "";
       return `
         <article class="feed-card">
           <header>
-            <button class="feed-date" data-entry-id="${entry.entry_id}" type="button">${formatDisplayDate(entry.date_key)}</button>
+            <div class="feed-title-line">
+              <button class="feed-date" data-entry-id="${entry.entry_id}" type="button">${formatDisplayDate(entry.date_key)}</button>
+              ${crossDayBadge}
+            </div>
             <button class="button ghost small export-feed-card" data-entry-id="${entry.entry_id}" type="button">导出卡片</button>
           </header>
           <p>${escapeHtml(last.content) || "空白版本"}</p>
@@ -493,6 +545,7 @@ function renderFeed(): void {
       state = switchEntry(state, button.dataset.entryId ?? state.active_entry_id);
       selectedVersionId = getActiveEntry(state).current_version_id;
       detailMode = "writing";
+      historyEditUnlockedEntryId = null;
       view = "write";
       persistState(state);
       render();
@@ -562,11 +615,12 @@ async function importZipBackup(file: File): Promise<void> {
       return;
     }
 
-    state = normalizeState(parsed.state);
+    state = ensureTodayEntry(normalizeState(parsed.state));
     persistState(state);
     pendingImportFile = null;
     selectedVersionId = getActiveEntry(state).current_version_id;
     detailMode = "writing";
+    historyEditUnlockedEntryId = null;
     view = "write";
     importConfirm.classList.add("hidden");
     importConfirmButton.disabled = false;
@@ -604,7 +658,8 @@ function renderEntryMarkdown(entry: DailyEntry): string {
   ];
 
   entry.versions.forEach((version, index) => {
-    lines.push(`- V${index + 1} · ${formatDateTime(version.created_at)} · ${getTokenStats(version.content).total_units}/300`);
+    const crossDay = isCrossDayVersion(entry, version) ? " · 跨天版本" : "";
+    lines.push(`- V${index + 1} · ${formatDateTime(version.created_at)} · ${getTokenStats(version.content).total_units}/300${crossDay}`);
   });
 
   lines.push("");
@@ -743,6 +798,19 @@ function getSelectedVersion(entry: DailyEntry): Version | null {
   return entry.versions.find((version) => version.version_id === selectedVersionId) ?? entry.versions.at(-1) ?? null;
 }
 
+function isTodayEntry(entry: DailyEntry): boolean {
+  return entry.date_key === todayKey();
+}
+
+function canEditActiveEntry(): boolean {
+  const activeEntry = getActiveEntry(state);
+  return detailMode === "writing" && (isTodayEntry(activeEntry) || historyEditUnlockedEntryId === activeEntry.entry_id);
+}
+
+function isCrossDayVersion(entry: DailyEntry, version: Version): boolean {
+  return toLocalDateKey(new Date(version.created_at)) !== entry.date_key;
+}
+
 function getVersionDiff(entry: DailyEntry, versionIndex: number): DiffUnit[] {
   const version = entry.versions[versionIndex];
   if (!version) {
@@ -780,7 +848,7 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   }
 
   measureCtx.font = cardFont(30);
-  const visibleLines = wrapTextPreservingBreaks(measureCtx, last.content || "空白版本", cardW - 96).slice(0, 14);
+  const visibleLines = wrapTextPreservingBreaks(measureCtx, last.content || "空白版本", cardW - 96);
   const contentEndY = contentStartY + Math.max(visibleLines.length - 1, 0) * lineHeight;
   const chipY = contentEndY + 58;
   const chipLayout = layoutCardChips(
