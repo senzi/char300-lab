@@ -506,6 +506,12 @@ h2 {
   display: none;
 }
 
+.practice-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
 .practice-tab {
   display: inline-flex;
   flex: 0 0 auto;
@@ -859,6 +865,10 @@ mark {
   .practice-bar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .practice-actions {
+    flex-wrap: wrap;
   }
 
   #editor,

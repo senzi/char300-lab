@@ -130,6 +130,20 @@ export function switchEntry(state: AppState, entryId: string): AppState {
   };
 }
 
+export function deleteEntry(state: AppState, entryId: string): AppState {
+  const target = state.entries.find((entry) => entry.entry_id === entryId);
+  if (!target || state.entries.length <= 1) {
+    return state;
+  }
+
+  const entries = sortEntries(state.entries.filter((entry) => entry.entry_id !== entryId));
+  const fallback = entries.find((entry) => entry.date_key === target.date_key) ?? entries[0];
+  return {
+    entries,
+    active_entry_id: state.active_entry_id === entryId ? fallback.entry_id : state.active_entry_id
+  };
+}
+
 export function updateDraft(state: AppState, content: string): AppState {
   return updateActiveEntry(state, (entry) => ({ ...entry, draft: content, updated_at: new Date().toISOString() }));
 }

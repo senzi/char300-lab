@@ -4,7 +4,7 @@ import logoUrl from "./assets/logo.svg";
 import { diffTexts, summarizeDiff } from "./diff";
 import { getTokenStats, tokenize } from "./tokenizer";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
-import { createTodayPractice, ensureTodayEntry, getActiveEntry, getFinalVersion, loadState, normalizeState, persistState, saveVersion, switchEntry, todayKey, updateDraft } from "./store";
+import { createTodayPractice, deleteEntry, ensureTodayEntry, getActiveEntry, getFinalVersion, loadState, normalizeState, persistState, saveVersion, switchEntry, todayKey, updateDraft } from "./store";
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
@@ -87,7 +87,10 @@ app.innerHTML = `
           <section class="write-view" id="writeView">
             <div class="practice-bar">
               <div class="practice-tabs" id="practiceTabs"></div>
-              <button class="button small" id="newPracticeButton" type="button">新练习</button>
+              <div class="practice-actions">
+                <button class="button small" id="deletePracticeButton" type="button">删除空练习</button>
+                <button class="button small" id="newPracticeButton" type="button">新练习</button>
+              </div>
             </div>
             <div class="history-edit-notice hidden" id="historyEditNotice">
               <div>
@@ -187,6 +190,7 @@ const feedRange = getElement<HTMLElement>("feedRange");
 const historyEditNotice = getElement<HTMLElement>("historyEditNotice");
 const unlockHistoryEditButton = getElement<HTMLButtonElement>("unlockHistoryEditButton");
 const practiceTabs = getElement<HTMLElement>("practiceTabs");
+const deletePracticeButton = getElement<HTMLButtonElement>("deletePracticeButton");
 const newPracticeButton = getElement<HTMLButtonElement>("newPracticeButton");
 const timeline = getElement<HTMLElement>("timeline");
 const meter = getElement<HTMLElement>("meter");
@@ -246,6 +250,24 @@ newPracticeButton.addEventListener("click", () => {
   persistState(state);
   render();
   editor.focus();
+});
+
+deletePracticeButton.addEventListener("click", () => {
+  const activeEntry = getActiveEntry(state);
+  if (!canDeleteActivePractice(activeEntry)) {
+    return;
+  }
+
+  if (activeEntry.draft.trim() && !window.confirm("这篇练习还没有保存版本，删除后草稿也会消失。确定删除吗？")) {
+    return;
+  }
+
+  state = deleteEntry(state, activeEntry.entry_id);
+  selectedVersionId = getActiveEntry(state).current_version_id;
+  detailMode = "writing";
+  historyEditUnlockedEntryId = null;
+  persistState(state);
+  render();
 });
 
 exportButton.addEventListener("click", () => {
@@ -356,6 +378,7 @@ function render(): void {
   reader.classList.toggle("hidden", detailMode === "writing");
   historyEditNotice.classList.toggle("hidden", !isHistoricalWriting || canEdit);
   newPracticeButton.disabled = !isTodayEntry(activeEntry);
+  deletePracticeButton.disabled = !canDeleteActivePractice(activeEntry);
   editor.disabled = !canEdit;
   saveButton.disabled = !canEdit || activeEntry.draft === activeEntry.lastSavedContent;
   exportImageButton.disabled = activeEntry.versions.length === 0;
@@ -893,6 +916,10 @@ function isTodayEntry(entry: DailyEntry): boolean {
 function canEditActiveEntry(): boolean {
   const activeEntry = getActiveEntry(state);
   return detailMode === "writing" && (isTodayEntry(activeEntry) || historyEditUnlockedEntryId === activeEntry.entry_id);
+}
+
+function canDeleteActivePractice(entry = getActiveEntry(state)): boolean {
+  return entry.versions.length === 0 && getEntriesForDate(entry.date_key).length > 1;
 }
 
 function isCrossDayVersion(entry: DailyEntry, version: Version): boolean {
