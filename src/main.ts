@@ -66,7 +66,6 @@ app.innerHTML = `
         <button id="writeViewButton" type="button">写作</button>
         <button id="feedViewButton" type="button">阅读流</button>
       </div>
-      <div class="meter" id="meter"></div>
     </div>
 
     <section class="writing-workspace" id="writingWorkspace">
@@ -92,6 +91,7 @@ app.innerHTML = `
                 <button class="button small" id="newPracticeButton" type="button">新练习</button>
               </div>
             </div>
+            <div class="meter" id="meter"></div>
             <div class="history-edit-notice hidden" id="historyEditNotice">
               <div>
                 <strong>历史日期已锁定</strong>
@@ -391,7 +391,6 @@ function render(): void {
   `;
 
   statsRow.innerHTML = `
-    <div><strong>${activeStats.text_units}</strong><span>文本单元</span></div>
     <div><strong>${activeStats.punctuation_units}</strong><span>标点</span></div>
     <div><strong>${activeStats.han_units}</strong><span>汉字</span></div>
     <div><strong>${activeStats.latin_units + activeStats.number_units}</strong><span>字母/数字</span></div>
@@ -476,14 +475,10 @@ function renderCalendarList(): void {
       const entries = getEntriesForDate(row.key);
       const latestEntry = entries[0];
       const writtenEntries = entries.filter((entry) => entry.versions.length > 0);
-      const latestWrittenEntry = writtenEntries[0];
       const isActive = active.date_key === row.key;
       const versionTotal = entries.reduce((total, entry) => total + entry.versions.length, 0);
-      const latestFinal = latestWrittenEntry ? getFinalVersion(latestWrittenEntry) : null;
       const classes = ["calendar-day", row.written ? "written" : "missed", isActive ? "active" : ""].join(" ");
-      const meta = row.written
-        ? `${writtenEntries.length}篇 · ${versionTotal}版 · ${latestFinal ? getTokenStats(latestFinal.content).total_units : 0}/300`
-        : "缺席";
+      const meta = row.written ? `${writtenEntries.length}篇 共${versionTotal}版` : "缺席";
       const disabled = latestEntry ? "" : "disabled";
       return `
         <button class="${classes}" data-entry-id="${latestEntry?.entry_id ?? ""}" type="button" ${disabled}>

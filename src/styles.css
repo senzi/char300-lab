@@ -330,6 +330,14 @@ h2 {
   font-weight: 400;
 }
 
+.stats-row strong {
+  font-size: 17px;
+}
+
+.stats-row span {
+  font-size: 14px;
+}
+
 .habit-stats span,
 .stats-row span,
 .version-time,
@@ -442,18 +450,26 @@ h2 {
 }
 
 .meter {
-  min-width: 180px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  border: 1px solid #eceae4;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(28, 28, 28, 0.025);
 }
 
 .meter-label {
   display: flex;
-  justify-content: flex-end;
+  align-items: baseline;
   gap: 4px;
-  margin-bottom: 6px;
+  min-width: 78px;
 }
 
 .meter-label strong {
-  font-size: 24px;
+  font-size: 25px;
   line-height: 1;
 }
 
@@ -482,9 +498,9 @@ h2 {
 
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
-  margin: 12px 0;
+  margin: 16px 0 12px;
 }
 
 .practice-bar {
@@ -859,7 +875,7 @@ mark {
   }
 
   .stats-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .practice-bar {
