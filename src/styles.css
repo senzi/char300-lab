@@ -487,6 +487,48 @@ h2 {
   margin: 12px 0;
 }
 
+.practice-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.practice-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+.practice-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.practice-tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #eceae4;
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: #1c1c1c;
+  background: transparent;
+  font-size: 14px;
+}
+
+.practice-tab strong {
+  color: #5f5f5d;
+  font-weight: 400;
+}
+
+.practice-tab.active {
+  border-color: rgba(28, 28, 28, 0.4);
+  background: rgba(28, 28, 28, 0.04);
+}
+
 .history-edit-notice {
   display: flex;
   align-items: center;
@@ -812,6 +854,11 @@ mark {
 
   .stats-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .practice-bar {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   #editor,

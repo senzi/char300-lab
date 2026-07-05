@@ -4,7 +4,7 @@ import logoUrl from "./assets/logo.svg";
 import { diffTexts, summarizeDiff } from "./diff";
 import { getTokenStats, tokenize } from "./tokenizer";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
-import { ensureTodayEntry, getActiveEntry, getFinalVersion, loadState, normalizeState, persistState, saveVersion, switchEntry, todayKey, updateDraft } from "./store";
+import { createTodayPractice, ensureTodayEntry, getActiveEntry, getFinalVersion, loadState, normalizeState, persistState, saveVersion, switchEntry, todayKey, updateDraft } from "./store";
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
@@ -85,6 +85,10 @@ app.innerHTML = `
 
         <section class="main-panel">
           <section class="write-view" id="writeView">
+            <div class="practice-bar">
+              <div class="practice-tabs" id="practiceTabs"></div>
+              <button class="button small" id="newPracticeButton" type="button">新练习</button>
+            </div>
             <div class="history-edit-notice hidden" id="historyEditNotice">
               <div>
                 <strong>历史日期已锁定</strong>
@@ -182,6 +186,8 @@ const feedList = getElement<HTMLElement>("feedList");
 const feedRange = getElement<HTMLElement>("feedRange");
 const historyEditNotice = getElement<HTMLElement>("historyEditNotice");
 const unlockHistoryEditButton = getElement<HTMLButtonElement>("unlockHistoryEditButton");
+const practiceTabs = getElement<HTMLElement>("practiceTabs");
+const newPracticeButton = getElement<HTMLButtonElement>("newPracticeButton");
 const timeline = getElement<HTMLElement>("timeline");
 const meter = getElement<HTMLElement>("meter");
 const statsRow = getElement<HTMLElement>("statsRow");
@@ -229,6 +235,17 @@ todayButton.addEventListener("click", () => {
   view = "write";
   persistState(state);
   render();
+});
+
+newPracticeButton.addEventListener("click", () => {
+  state = createTodayPractice(state);
+  selectedVersionId = getActiveEntry(state).current_version_id;
+  detailMode = "writing";
+  historyEditUnlockedEntryId = null;
+  view = "write";
+  persistState(state);
+  render();
+  editor.focus();
 });
 
 exportButton.addEventListener("click", () => {
@@ -338,6 +355,7 @@ function render(): void {
   editor.classList.toggle("hidden", detailMode === "version");
   reader.classList.toggle("hidden", detailMode === "writing");
   historyEditNotice.classList.toggle("hidden", !isHistoricalWriting || canEdit);
+  newPracticeButton.disabled = !isTodayEntry(activeEntry);
   editor.disabled = !canEdit;
   saveButton.disabled = !canEdit || activeEntry.draft === activeEntry.lastSavedContent;
   exportImageButton.disabled = activeEntry.versions.length === 0;
@@ -357,6 +375,7 @@ function render(): void {
   `;
 
   renderHabitStats();
+  renderPracticeTabs(activeEntry);
   renderCalendarList();
   renderTimeline(activeEntry);
   renderReader(activeEntry);
@@ -386,13 +405,43 @@ function showImportConfirm(): void {
 
 function renderHabitStats(): void {
   const stats = getHabitStats();
+  const articleCount = getWrittenEntries().length;
   entryCount.textContent = String(stats.writtenDays);
   habitStats.innerHTML = `
     <div><strong>${stats.writtenDays} / ${writingYearGoalDays}</strong><span>写作天数</span></div>
+    <div><strong>${articleCount}</strong><span>文字篇数</span></div>
     <div><strong>${stats.absentDays}</strong><span>缺席天数</span></div>
     <div><strong>${stats.currentStreak}</strong><span>当前连击</span></div>
     <div><strong>${stats.maxStreak}</strong><span>最大连击</span></div>
   `;
+}
+
+function renderPracticeTabs(activeEntry: DailyEntry): void {
+  const entries = getEntriesForDate(activeEntry.date_key);
+  practiceTabs.innerHTML = entries
+    .map((entry, index) => {
+      const finalVersion = getFinalVersion(entry);
+      const active = entry.entry_id === activeEntry.entry_id ? " active" : "";
+      const savedMark = finalVersion ? `${getTokenStats(finalVersion.content).total_units}/300` : "草稿";
+      return `
+        <button class="practice-tab${active}" data-entry-id="${entry.entry_id}" type="button">
+          <span>${getPracticeLabel(entry, entries, index)}</span>
+          <strong>${savedMark}</strong>
+        </button>
+      `;
+    })
+    .join("");
+
+  practiceTabs.querySelectorAll<HTMLButtonElement>(".practice-tab[data-entry-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state = switchEntry(state, button.dataset.entryId ?? state.active_entry_id);
+      selectedVersionId = getActiveEntry(state).current_version_id;
+      detailMode = "writing";
+      historyEditUnlockedEntryId = null;
+      persistState(state);
+      render();
+    });
+  });
 }
 
 function renderCalendarList(): void {
@@ -401,14 +450,20 @@ function renderCalendarList(): void {
 
   calendarList.innerHTML = rows
     .map((row) => {
-      const entry = state.entries.find((item) => item.date_key === row.key);
-      const isActive = entry?.entry_id === active.entry_id;
-      const finalVersion = entry ? getFinalVersion(entry) : null;
+      const entries = getEntriesForDate(row.key);
+      const latestEntry = entries[0];
+      const writtenEntries = entries.filter((entry) => entry.versions.length > 0);
+      const latestWrittenEntry = writtenEntries[0];
+      const isActive = active.date_key === row.key;
+      const versionTotal = entries.reduce((total, entry) => total + entry.versions.length, 0);
+      const latestFinal = latestWrittenEntry ? getFinalVersion(latestWrittenEntry) : null;
       const classes = ["calendar-day", row.written ? "written" : "missed", isActive ? "active" : ""].join(" ");
-      const meta = row.written ? `${finalVersion ? getTokenStats(finalVersion.content).total_units : 0}/300 · ${entry?.versions.length ?? 0}版` : "缺席";
-      const disabled = entry ? "" : "disabled";
+      const meta = row.written
+        ? `${writtenEntries.length}篇 · ${versionTotal}版 · ${latestFinal ? getTokenStats(latestFinal.content).total_units : 0}/300`
+        : "缺席";
+      const disabled = latestEntry ? "" : "disabled";
       return `
-        <button class="${classes}" data-entry-id="${entry?.entry_id ?? ""}" type="button" ${disabled}>
+        <button class="${classes}" data-entry-id="${latestEntry?.entry_id ?? ""}" type="button" ${disabled}>
           <span>${formatShortDate(row.key)}</span>
           <strong>${meta}</strong>
         </button>
@@ -510,7 +565,7 @@ function renderDailySummary(entry: DailyEntry): void {
 function renderFeed(): void {
   const stats = getHabitStats();
   feedRange.textContent = stats.firstDay ? `${stats.firstDay} 至 ${todayKey()}` : "尚无记录";
-  const writtenEntries = state.entries.filter((entry) => entry.versions.length > 0);
+  const writtenEntries = getWrittenEntries();
 
   if (writtenEntries.length === 0) {
     feedList.innerHTML = `<p class="empty">保存第一个每日版本后，这里会变成你的总阅读流。</p>`;
@@ -523,12 +578,14 @@ function renderFeed(): void {
       if (!last) {
         return "";
       }
+      const sameDayEntries = getEntriesForDate(entry.date_key);
+      const label = getPracticeLabel(entry, sameDayEntries);
       const crossDayBadge = isCrossDayVersion(entry, last) ? `<span class="feed-badge">跨天版本</span>` : "";
       return `
         <article class="feed-card">
           <header>
             <div class="feed-title-line">
-              <button class="feed-date" data-entry-id="${entry.entry_id}" type="button">${formatDisplayDate(entry.date_key)}</button>
+              <button class="feed-date" data-entry-id="${entry.entry_id}" type="button">${formatDisplayDate(entry.date_key)} · ${label}</button>
               ${crossDayBadge}
             </div>
             <button class="button ghost small export-feed-card" data-entry-id="${entry.entry_id}" type="button">导出卡片</button>
@@ -564,18 +621,18 @@ function renderFeed(): void {
 
 function exportDayMarkdown(entry: DailyEntry): void {
   const markdown = renderEntryMarkdown(entry);
-  downloadBlob(new Blob([markdown], { type: "text/markdown;charset=utf-8" }), `逐字-${entry.date_key}.md`);
+  downloadBlob(new Blob([markdown], { type: "text/markdown;charset=utf-8" }), `逐字-${entry.date_key}-${slugifyPracticeLabel(entry)}.md`);
 }
 
 function exportAllMarkdown(): void {
-  const writtenEntries = state.entries.filter((entry) => entry.versions.length > 0);
+  const writtenEntries = getWrittenEntries();
   const markdown = [`# 逐字`, "", appSlogan, "", `导出时间：${new Date().toISOString()}`, "", ...writtenEntries.map(renderEntryMarkdown)].join("\n");
   downloadBlob(new Blob([markdown], { type: "text/markdown;charset=utf-8" }), `逐字-全部-${todayKey()}.md`);
 }
 
 async function exportZipBackup(): Promise<void> {
   const zip = new JSZip();
-  const writtenEntries = state.entries.filter((entry) => entry.versions.length > 0);
+  const writtenEntries = getWrittenEntries();
   const payload = {
     app: appName,
     schema_version: 2,
@@ -587,7 +644,7 @@ async function exportZipBackup(): Promise<void> {
   zip.file("markdown/all.md", [`# 逐字`, "", appSlogan, "", `导出时间：${payload.exported_at}`, "", ...writtenEntries.map(renderEntryMarkdown)].join("\n"));
 
   for (const entry of writtenEntries) {
-    zip.file(`markdown/days/${entry.date_key}.md`, renderEntryMarkdown(entry));
+    zip.file(`markdown/days/${entry.date_key}-${slugifyPracticeLabel(entry)}.md`, renderEntryMarkdown(entry));
   }
 
   const blob = await zip.generateAsync({ type: "blob" });
@@ -644,8 +701,10 @@ function renderEntryMarkdown(entry: DailyEntry): string {
   }
 
   const summary = summarizeDiff(first.content, last.content);
+  const sameDayEntries = getEntriesForDate(entry.date_key);
+  const label = getPracticeLabel(entry, sameDayEntries);
   const lines = [
-    `## ${entry.date_key}`,
+    `## ${entry.date_key} · ${label}`,
     "",
     `${getTokenStats(last.content).total_units}/300`,
     "",
@@ -703,6 +762,35 @@ function downloadBlob(blob: Blob, filename: string): void {
   link.href = url;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function getWrittenEntries(): DailyEntry[] {
+  return state.entries.filter((entry) => entry.versions.length > 0);
+}
+
+function getEntriesForDate(key: string): DailyEntry[] {
+  return state.entries
+    .filter((entry) => entry.date_key === key)
+    .sort((left, right) => right.created_at.localeCompare(left.created_at));
+}
+
+function getPracticeLabel(entry: DailyEntry, entries = getEntriesForDate(entry.date_key), fallbackIndex?: number): string {
+  const chronological = [...entries].sort((left, right) => left.created_at.localeCompare(right.created_at));
+  const index = chronological.findIndex((item) => item.entry_id === entry.entry_id);
+  if (index >= 0) {
+    return `第${index + 1}篇`;
+  }
+
+  if (typeof fallbackIndex === "number") {
+    return `第${fallbackIndex + 1}篇`;
+  }
+
+  return entry.optional_title && entry.optional_title !== entry.date_key ? entry.optional_title : "第1篇";
+}
+
+function slugifyPracticeLabel(entry: DailyEntry): string {
+  const label = getPracticeLabel(entry);
+  return label.replace(/[^\p{Letter}\p{Number}]+/gu, "-");
 }
 
 function getHabitStats(): {
@@ -841,6 +929,7 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   const lineHeight = 48;
   const lastStats = getTokenStats(last.content);
   const meterText = `${lastStats.total_units} / 300`;
+  const achievementText = renderShareAchievementText();
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
   if (!measureCtx) {
@@ -862,7 +951,7 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
     cardW - 96
   );
   const signatureY = chipY + chipLayout.height + 50;
-  const cardH = Math.max(620, signatureY + 56 - cardY);
+  const cardH = Math.max(620, signatureY + 98 - cardY);
   const cardHeight = cardY + cardH + 56;
   canvas.width = cardWidth * scale;
   canvas.height = cardHeight * scale;
@@ -889,7 +978,7 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
 
   ctx.fillStyle = "#1c1c1c";
   ctx.font = cardFont(34);
-  ctx.fillText(formatDisplayDate(entry.date_key), cardInnerX, 134);
+  ctx.fillText(`${formatDisplayDate(entry.date_key)} · ${getPracticeLabel(entry, getEntriesForDate(entry.date_key))}`, cardInnerX, 134);
   ctx.font = cardFont(28);
   const meterPaddingX = 24;
   const meterWidth = Math.ceil(ctx.measureText(meterText).width + meterPaddingX * 2);
@@ -906,18 +995,28 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
 
   chipLayout.chips.forEach((chip) => drawCardChip(ctx, chip));
 
+  ctx.fillStyle = "#1c1c1c";
+  ctx.font = cardFont(26);
+  ctx.fillText(achievementText, cardInnerX, signatureY);
   ctx.fillStyle = "rgba(28,28,28,0.52)";
   ctx.font = cardFont(24);
-  ctx.fillText(`${appName} · ${appSlogan}`, cardInnerX, signatureY);
+  ctx.fillText(`${appName}，${appSlogan}`, cardInnerX, signatureY + 38);
 
   const link = document.createElement("a");
-  link.download = `char300-daily-card-${entry.date_key}.png`;
+  link.download = `char300-daily-card-${entry.date_key}-${slugifyPracticeLabel(entry)}.png`;
   link.href = canvas.toDataURL("image/png");
   link.click();
 }
 
 function cardFont(size: number): string {
   return `${size}px "LXGW WenKai", ui-sans-serif, system-ui`;
+}
+
+function renderShareAchievementText(): string {
+  const stats = getHabitStats();
+  const articleCount = getWrittenEntries().length;
+  const versionTotal = state.entries.reduce((total, entry) => total + entry.versions.length, 0);
+  return `累计${stats.writtenDays}天写作，${articleCount}篇文字，${versionTotal}个版本`;
 }
 
 function drawSoftPill(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {

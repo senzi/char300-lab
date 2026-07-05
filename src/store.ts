@@ -30,6 +30,17 @@ export function createEntry(key = todayKey(), createdAt = new Date().toISOString
   };
 }
 
+export function createPracticeEntry(
+  key = todayKey(),
+  index = 1,
+  createdAt = new Date().toISOString()
+): DailyEntry {
+  return {
+    ...createEntry(key, createdAt),
+    optional_title: `第${index}篇`
+  };
+}
+
 export function createEmptyState(): AppState {
   const entry = createEntry();
   return {
@@ -87,12 +98,21 @@ export function persistState(state: AppState): void {
 
 export function ensureTodayEntry(state: AppState): AppState {
   const key = todayKey();
-  const existing = state.entries.find((entry) => entry.date_key === key);
+  const existing = sortEntries(state.entries.filter((entry) => entry.date_key === key))[0];
   if (existing) {
     return { ...state, active_entry_id: existing.entry_id };
   }
 
-  const entry = createEntry(key);
+  const entry = createPracticeEntry(key, 1);
+  return {
+    entries: sortEntries([...state.entries, entry]),
+    active_entry_id: entry.entry_id
+  };
+}
+
+export function createTodayPractice(state: AppState): AppState {
+  const key = todayKey();
+  const entry = createPracticeEntry(key, state.entries.filter((item) => item.date_key === key).length + 1);
   return {
     entries: sortEntries([...state.entries, entry]),
     active_entry_id: entry.entry_id
@@ -139,7 +159,7 @@ export function saveVersion(state: AppState): AppState {
       ...entry,
       updated_at: now,
       current_version_id: version.version_id,
-      optional_title: entry.date_key,
+      optional_title: entry.optional_title,
       versions: [...entry.versions, version],
       lastSavedContent: content
     };
@@ -198,5 +218,12 @@ function normalizeEntry(entry: DailyEntry): DailyEntry {
 }
 
 function sortEntries(entries: DailyEntry[]): DailyEntry[] {
-  return [...entries].sort((left, right) => right.date_key.localeCompare(left.date_key));
+  return [...entries].sort((left, right) => {
+    const dateSort = right.date_key.localeCompare(left.date_key);
+    if (dateSort !== 0) {
+      return dateSort;
+    }
+
+    return right.created_at.localeCompare(left.created_at);
+  });
 }
