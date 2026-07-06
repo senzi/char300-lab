@@ -9,10 +9,12 @@ import { createTodayPractice, deleteEntry, ensureTodayEntry, getActiveEntry, get
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
 const storageNoticeKey = "zhuzi-storage-notice-dismissed-v1";
+const themePreferenceKey = "zhuzi-theme-preference-v1";
 const writingYearGoalDays = 365;
 
 type View = "write" | "feed";
 type DetailMode = "writing" | "version";
+type ThemePreference = "auto" | "light" | "dark";
 type CardChip =
   | { kind: "diff"; label: string; inserted: number; deleted: number; width: number }
   | { kind: "plain"; label: string; value: string; width: number };
@@ -46,6 +48,14 @@ app.innerHTML = `
       <h1 id="dateTitle" class="date-title"></h1>
       <div class="top-actions">
         <button class="button ghost" id="todayButton" type="button">回到今日</button>
+        <label class="theme-switcher">
+          <span>模式</span>
+          <select id="themeSelect" aria-label="夜间模式">
+            <option value="auto">自动</option>
+            <option value="light">日间</option>
+            <option value="dark">夜间</option>
+          </select>
+        </label>
         <div class="export-menu-wrap">
           <button class="button ghost" id="exportButton" type="button" aria-expanded="false">导出</button>
           <div class="export-menu hidden" id="exportMenu">
@@ -170,6 +180,7 @@ app.innerHTML = `
 
 const dateTitle = getElement<HTMLElement>("dateTitle");
 const todayButton = getElement<HTMLButtonElement>("todayButton");
+const themeSelect = getElement<HTMLSelectElement>("themeSelect");
 const saveButton = getElement<HTMLButtonElement>("saveButton");
 const exportButton = getElement<HTMLButtonElement>("exportButton");
 const exportMenu = getElement<HTMLElement>("exportMenu");
@@ -207,6 +218,10 @@ const importConfirm = getElement<HTMLElement>("importConfirm");
 const importStatus = getElement<HTMLElement>("importStatus");
 const importCancelButton = getElement<HTMLButtonElement>("importCancelButton");
 const importConfirmButton = getElement<HTMLButtonElement>("importConfirmButton");
+const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+let themePreference = loadThemePreference();
+
+applyThemePreference();
 
 editor.addEventListener("input", () => {
   if (!canEditActiveEntry()) {
@@ -335,6 +350,18 @@ importConfirmButton.addEventListener("click", () => {
   }
 });
 
+themeSelect.addEventListener("change", () => {
+  themePreference = parseThemePreference(themeSelect.value);
+  localStorage.setItem(themePreferenceKey, themePreference);
+  applyThemePreference();
+});
+
+colorSchemeQuery.addEventListener("change", () => {
+  if (themePreference === "auto") {
+    applyThemePreference();
+  }
+});
+
 writeViewButton.addEventListener("click", () => {
   view = "write";
   render();
@@ -403,6 +430,25 @@ function render(): void {
   renderReader(activeEntry);
   renderDailySummary(activeEntry);
   renderFeed();
+}
+
+function loadThemePreference(): ThemePreference {
+  return parseThemePreference(localStorage.getItem(themePreferenceKey));
+}
+
+function parseThemePreference(value: string | null): ThemePreference {
+  if (value === "light" || value === "dark") {
+    return value;
+  }
+
+  return "auto";
+}
+
+function applyThemePreference(): void {
+  const resolvedTheme = themePreference === "auto" ? (colorSchemeQuery.matches ? "dark" : "light") : themePreference;
+  document.body.classList.toggle("theme-dark", resolvedTheme === "dark");
+  document.documentElement.style.colorScheme = resolvedTheme;
+  themeSelect.value = themePreference;
 }
 
 function closeExportMenu(): void {
