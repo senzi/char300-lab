@@ -497,6 +497,7 @@ h3 {
   overflow: auto;
   scrollbar-width: none;
   padding-right: 4px;
+  margin-top: 8px;
 }
 
 .calendar-list {
