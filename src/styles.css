@@ -487,6 +487,7 @@ h2 {
   flex: 1 1 auto;
   min-height: 84px;
   overflow: auto;
+  scrollbar-width: none;
   padding-right: 4px;
 }
 
@@ -494,7 +495,13 @@ h2 {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  scrollbar-width: none;
   padding-right: 4px;
+}
+
+.timeline::-webkit-scrollbar,
+.calendar-list::-webkit-scrollbar {
+  display: none;
 }
 
 .calendar-day,
@@ -683,6 +690,7 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  margin-top: 12px;
   border: 1px solid var(--danger-border-strong);
   border-radius: 8px;
   padding: 10px 12px;
@@ -724,6 +732,12 @@ h2 {
   line-height: 1.75;
   resize: none;
   outline: 0;
+  scrollbar-width: none;
+}
+
+#editor::-webkit-scrollbar,
+.reader::-webkit-scrollbar {
+  display: none;
 }
 
 #editor:focus {
