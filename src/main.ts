@@ -64,6 +64,7 @@ app.innerHTML = `
           <button class="button ghost" id="exportButton" type="button" aria-expanded="false">导出</button>
           <div class="export-menu hidden" id="exportMenu">
             <button id="exportImageButton" type="button">分享图片</button>
+            <button id="exportOverviewImageButton" type="button">总览图片</button>
             <button id="exportDayMarkdownButton" type="button">当日 Markdown</button>
             <button id="exportAllMarkdownButton" type="button">全部 Markdown</button>
             <button id="exportZipButton" type="button">完整数据 ZIP</button>
@@ -181,10 +182,7 @@ app.innerHTML = `
           <p class="panel-kicker">Overview</p>
           <h2>总览</h2>
         </div>
-        <div class="overview-actions">
-          <span id="overviewRange"></span>
-          <button class="button ghost small" id="exportOverviewImageButton" type="button">下载图片</button>
-        </div>
+        <span id="overviewRange"></span>
       </div>
       <div class="overview-summary" id="overviewSummary"></div>
       <section class="overview-board">
@@ -377,6 +375,11 @@ exportImageButton.addEventListener("click", () => {
   void exportDailyCard(getActiveEntry(state));
 });
 
+exportOverviewImageButton.addEventListener("click", () => {
+  closeExportMenu();
+  void exportOverviewCard();
+});
+
 exportDayMarkdownButton.addEventListener("click", () => {
   closeExportMenu();
   exportDayMarkdown(getActiveEntry(state));
@@ -390,10 +393,6 @@ exportAllMarkdownButton.addEventListener("click", () => {
 exportZipButton.addEventListener("click", () => {
   closeExportMenu();
   void exportZipBackup();
-});
-
-exportOverviewImageButton.addEventListener("click", () => {
-  void exportOverviewCard();
 });
 
 importZipButton.addEventListener("click", () => {
@@ -893,7 +892,7 @@ async function exportOverviewCard(): Promise<void> {
   const versionMax = Math.max(...elapsedDays.map((day) => day.versions), 1);
   const scale = 2;
   const width = 1280;
-  const height = 920;
+  const height = 1040;
   const canvas = document.createElement("canvas");
   canvas.width = width * scale;
   canvas.height = height * scale;
@@ -907,11 +906,11 @@ async function exportOverviewCard(): Promise<void> {
   ctx.fillRect(0, 0, width, height);
   ctx.fillStyle = "#1c1c1c";
   ctx.font = cardFont(38);
-  ctx.fillText("逐字总览", 64, 86);
+  ctx.fillText("逐字总览", 72, 88);
   ctx.fillStyle = "rgba(28,28,28,0.56)";
   ctx.font = cardFont(24);
-  ctx.fillText(`${days[0]?.key ?? todayKey()} 至 ${days.at(-1)?.key ?? todayKey()}`, 64, 124);
-  ctx.fillText(appSlogan, 64, 846);
+  ctx.fillText(`${days[0]?.key ?? todayKey()} 至 ${days.at(-1)?.key ?? todayKey()}`, 72, 126);
+  ctx.fillText(appSlogan, 72, 964);
 
   drawOverviewCardStats(ctx, [
     ["写作天数", String(writtenDays.length)],
@@ -926,28 +925,28 @@ async function exportOverviewCard(): Promise<void> {
 
   ctx.fillStyle = "#1c1c1c";
   ctx.font = cardFont(26);
-  ctx.fillText("年度格", 64, 322);
+  ctx.fillText("年度格", 72, 384);
   ctx.fillStyle = "rgba(28,28,28,0.56)";
   ctx.font = cardFont(20);
-  ctx.fillText(`${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 +${insertedTotal} -${deletedTotal}`, 168, 322);
-  drawOverviewCardGrid(ctx, days, intensityMax, 64, 346);
+  ctx.fillText(`${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 +${insertedTotal} -${deletedTotal}`, 176, 384);
+  drawOverviewCardGrid(ctx, days, intensityMax, 72, 410);
 
   ctx.fillStyle = "#1c1c1c";
   ctx.font = cardFont(26);
-  ctx.fillText("每日数据", 64, 508);
+  ctx.fillText("每日数据", 72, 606);
   ctx.fillStyle = "rgba(28,28,28,0.56)";
   ctx.font = cardFont(20);
-  ctx.fillText("按已推进日期展示，不含正文", 186, 508);
-  drawOverviewCardTrack(ctx, "日总字数", elapsedDays, wordMax, (day) => day.wordCount, 64, 548);
-  drawOverviewCardTrack(ctx, "日版本", elapsedDays, versionMax, (day) => day.versions, 64, 626);
-  drawOverviewCardTrack(ctx, "日修改量", elapsedDays, intensityMax, (day) => day.churn, 64, 704);
+  ctx.fillText("按已推进日期展示，不含正文", 194, 606);
+  drawOverviewCardTrack(ctx, "日总字数", elapsedDays, wordMax, (day) => day.wordCount, 72, 650);
+  drawOverviewCardTrack(ctx, "日版本", elapsedDays, versionMax, (day) => day.versions, 72, 732);
+  drawOverviewCardTrack(ctx, "日修改量", elapsedDays, intensityMax, (day) => day.churn, 72, 814);
 
-  drawSoftPill(ctx, 64, 778, 520, 48);
+  drawSoftPill(ctx, 72, 894, 520, 48);
   ctx.fillStyle = "#1c1c1c";
   ctx.font = cardFont(22);
-  ctx.fillText("修改量最高", 88, 809);
+  ctx.fillText("修改量最高", 96, 925);
   ctx.fillStyle = "rgba(28,28,28,0.62)";
-  ctx.fillText(bestChurnDay ? `${formatShortDate(bestChurnDay.key)} · +${bestChurnDay.inserted} -${bestChurnDay.deleted}` : "保存版本后显示当日修改量", 220, 809);
+  ctx.fillText(bestChurnDay ? `${formatShortDate(bestChurnDay.key)} · +${bestChurnDay.inserted} -${bestChurnDay.deleted}` : "保存版本后显示当日修改量", 228, 925);
 
   const link = document.createElement("a");
   link.download = `zhuzi-overview-${todayKey()}.png`;
@@ -1539,10 +1538,10 @@ function drawCardChip(ctx: CanvasRenderingContext2D, chip: PositionedCardChip): 
 }
 
 function drawOverviewCardStats(ctx: CanvasRenderingContext2D, stats: Array<[string, string]>): void {
-  const startX = 64;
-  const startY = 160;
-  const gap = 12;
-  const itemW = 136;
+  const startX = 72;
+  const startY = 164;
+  const gap = 16;
+  const itemW = 260;
   const itemH = 84;
 
   stats.forEach(([label, value], index) => {
@@ -1550,7 +1549,7 @@ function drawOverviewCardStats(ctx: CanvasRenderingContext2D, stats: Array<[stri
     const y = startY + Math.floor(index / 4) * (itemH + gap);
     drawSoftPill(ctx, x, y, itemW, itemH);
     ctx.fillStyle = "#1c1c1c";
-    ctx.font = cardFont(30);
+    ctx.font = cardFont(28);
     ctx.fillText(value, x + 18, y + 36);
     ctx.fillStyle = "rgba(28,28,28,0.56)";
     ctx.font = cardFont(19);
@@ -1583,7 +1582,7 @@ function drawOverviewCardTrack(
   const trackW = 1040;
   const barGap = 2;
   const count = Math.max(days.length, 1);
-  const barW = Math.max(3, (trackW - (count - 1) * barGap) / count);
+  const barW = Math.max(5, Math.min(14, (trackW - (count - 1) * barGap) / count));
   ctx.fillStyle = "rgba(28,28,28,0.56)";
   ctx.font = cardFont(20);
   ctx.fillText(label, x, y + 38);

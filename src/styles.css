@@ -863,13 +863,6 @@ mark {
   color: var(--muted);
 }
 
-.overview-actions {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
 .overview-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -984,8 +977,9 @@ body.theme-dark .year-cell.written.level-3 {
 
 .overview-track div {
   display: grid;
-  grid-template-columns: repeat(var(--day-count), minmax(6px, 1fr));
+  grid-template-columns: repeat(var(--day-count), minmax(10px, 16px));
   align-items: end;
+  justify-content: start;
   gap: 1px;
   min-height: 42px;
   border-bottom: 1px solid var(--border);
@@ -1205,11 +1199,6 @@ body.theme-dark .year-cell.written.level-3 {
 
   .theme-inline {
     justify-content: flex-start;
-  }
-
-  .overview-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
   }
 
   h1 {
