@@ -216,6 +216,15 @@ h3 {
   background: var(--subtle);
 }
 
+.export-menu .export-menu-upgrade {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 6px 6px;
+  padding-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .date-title {
   justify-self: center;
   text-align: center;
@@ -316,6 +325,85 @@ h3 {
 
 .inline-status.info {
   color: var(--muted);
+}
+
+.changelog-dialog {
+  max-height: min(680px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+}
+
+.changelog-list {
+  display: grid;
+  gap: 16px;
+  max-height: min(460px, calc(100vh - 230px));
+  padding-right: 2px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.changelog-list::-webkit-scrollbar {
+  display: none;
+}
+
+.changelog-entry {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.changelog-entry:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.changelog-entry-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.changelog-entry h3 {
+  margin: 6px 0 8px;
+  font-size: 17px;
+}
+
+.changelog-entry ul {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-soft);
+  line-height: 1.7;
+}
+
+.storage-health-light {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 15;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  padding: 0;
+  background: var(--danger);
+  box-shadow: 0 0 0 3px var(--bg), 0 1px 4px rgba(0, 0, 0, 0.16);
+}
+
+.storage-health-light:focus-visible {
+  outline: 2px solid var(--strong-border);
+  outline-offset: 3px;
+}
+
+.storage-health-light-green {
+  border-color: rgba(40, 122, 70, 0.36);
+  background: var(--success);
+}
+
+.storage-health-light-red {
+  border-color: var(--danger-border-strong);
+  background: var(--danger);
 }
 
 .workspace {
@@ -1109,14 +1197,20 @@ body.theme-dark .year-cell.written.level-3 {
   font-size: 13px;
 }
 
-.app-footer a {
+.app-footer a,
+.app-footer button {
+  border: 0;
+  padding: 0;
   color: inherit;
+  background: transparent;
   text-decoration: none;
   text-underline-offset: 3px;
 }
 
 .app-footer a:hover,
-.app-footer a:focus-visible {
+.app-footer a:focus-visible,
+.app-footer button:hover,
+.app-footer button:focus-visible {
   color: var(--text);
   text-decoration: underline;
 }

@@ -4,17 +4,46 @@ import logoUrl from "./assets/logo.svg";
 import { diffTexts, summarizeDiff } from "./diff";
 import { getTokenStats, tokenize } from "./tokenizer";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
-import { createTodayPractice, deleteEntry, ensureTodayEntry, getActiveEntry, getFinalVersion, loadState, normalizeState, persistState, saveVersion, switchEntry, todayKey, updateDraft } from "./store";
+import { canOfferOpfsUpgrade, createTodayPractice, deleteEntry, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistState, saveVersion, shouldShowOpfsUpgradePrompt, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
 const storageNoticeKey = "zhuzi-storage-notice-dismissed-v1";
+const changelogSeenVersionKey = "zhuzi-changelog-seen-version";
 const themePreferenceKey = "zhuzi-theme-preference-v1";
 const writingYearGoalDays = 365;
+const changelog: ChangelogEntry[] = [
+  {
+    version: "0.2.0",
+    date: "2026-07-06",
+    title: "本地存储升级",
+    items: [
+      "新增 OPFS 本地存储，支持更大的写作档案。",
+      "升级前会自动下载完整数据 ZIP 备份。",
+      "旧版 ZIP 导入会继续兼容。"
+    ]
+  },
+  {
+    version: "0.1.1",
+    date: "2026-07-06",
+    title: "夜间模式与总览视图",
+    items: [
+      "新增夜间模式切换，支持跟随系统、日间、夜间。",
+      "新增总览视图，展示年度格、写作天数、缺席天数和每日数据。"
+    ]
+  }
+];
 
 type View = "write" | "feed" | "overview";
 type DetailMode = "writing" | "version";
 type ThemePreference = "auto" | "light" | "dark";
+type StorageDialogMode = "notice" | "upgrade";
+type ChangelogEntry = {
+  version: string;
+  date: string;
+  title: string;
+  items: string[];
+};
 type OverviewDay = {
   key: string;
   state: "written" | "absent" | "future";
@@ -69,6 +98,7 @@ app.innerHTML = `
             <button id="exportAllMarkdownButton" type="button">全部 Markdown</button>
             <button id="exportZipButton" type="button">完整数据 ZIP</button>
             <button id="importZipButton" type="button">从 ZIP 导入</button>
+            <button class="export-menu-upgrade hidden" id="storageUpgradeMenuButton" type="button">升级本地存储</button>
           </div>
         </div>
         <button class="button primary" id="saveButton" type="button">保存版本</button>
@@ -203,6 +233,8 @@ app.innerHTML = `
     <footer class="app-footer">
       <a href="https://github.com/senzi/char300-lab" target="_blank" rel="noreferrer">Github</a>
       <span aria-hidden="true">|</span>
+      <button id="changelogButton" type="button">更新日志</button>
+      <span aria-hidden="true">|</span>
       <span>MIT</span>
       <span aria-hidden="true">|</span>
       <span>Vibecoding</span>
@@ -210,21 +242,6 @@ app.innerHTML = `
       <a href="https://weibo.com/1401527553/R71bIwAVs" target="_blank" rel="noreferrer">灵感来源</a>
     </footer>
   </main>
-  <div class="notice-backdrop hidden" id="storageNotice" role="dialog" aria-modal="true" aria-labelledby="storageNoticeTitle">
-    <section class="notice-dialog">
-      <p class="panel-kicker">Local Storage</p>
-      <h2 id="storageNoticeTitle">写作内容只保存在当前浏览器</h2>
-      <p>网页版不会把文章保存到项目目录或云端。数据保存在当前浏览器、当前访问地址的 localStorage 里；换浏览器、换端口、清理站点数据或使用无痕模式，都可能导致内容不可见或丢失。</p>
-      <p>认真写作前，建议定期使用“导出 → 完整数据 ZIP”备份。</p>
-      <label class="notice-check">
-        <input id="storageNoticeDontShow" type="checkbox" />
-        <span>不再提醒</span>
-      </label>
-      <div class="notice-actions">
-        <button class="button primary" id="storageNoticeClose" type="button">我知道了</button>
-      </div>
-    </section>
-  </div>
   <div class="notice-backdrop hidden" id="importConfirm" role="dialog" aria-modal="true" aria-labelledby="importConfirmTitle">
     <section class="notice-dialog">
       <p class="panel-kicker">Import</p>
@@ -237,6 +254,34 @@ app.innerHTML = `
       </div>
     </section>
   </div>
+  <div class="notice-backdrop hidden" id="storageDialog" role="dialog" aria-modal="true" aria-labelledby="storageDialogTitle">
+    <section class="notice-dialog">
+      <p class="panel-kicker" id="storageDialogKicker">Storage</p>
+      <h2 id="storageDialogTitle">本地存储</h2>
+      <p id="storageDialogBodyPrimary"></p>
+      <p id="storageDialogBodySecondary"></p>
+      <p class="inline-status hidden" id="storageDialogStatus"></p>
+      <label class="notice-check">
+        <input id="storageDialogDontShow" type="checkbox" />
+        <span>不再提醒</span>
+      </label>
+      <div class="notice-actions">
+        <button class="button ghost" id="storageDialogSecondaryButton" type="button">先不升级</button>
+        <button class="button primary" id="storageDialogPrimaryButton" type="button">我知道了</button>
+      </div>
+    </section>
+  </div>
+  <div class="notice-backdrop hidden" id="changelogDialog" role="dialog" aria-modal="true" aria-labelledby="changelogTitle">
+    <section class="notice-dialog changelog-dialog">
+      <p class="panel-kicker">Changelog</p>
+      <h2 id="changelogTitle">“逐字”更新日志</h2>
+      <div class="changelog-list" id="changelogList"></div>
+      <div class="notice-actions">
+        <button class="button primary" id="changelogCloseButton" type="button">知道了</button>
+      </div>
+    </section>
+  </div>
+  <button class="storage-health-light storage-health-light-red" id="storageHealthLight" type="button" aria-label="OPFS 未启用" title="OPFS 未启用"></button>
 `;
 
 const dateTitle = getElement<HTMLElement>("dateTitle");
@@ -252,6 +297,7 @@ const exportAllMarkdownButton = getElement<HTMLButtonElement>("exportAllMarkdown
 const exportZipButton = getElement<HTMLButtonElement>("exportZipButton");
 const importZipButton = getElement<HTMLButtonElement>("importZipButton");
 const importZipInput = getElement<HTMLInputElement>("importZipInput");
+const storageUpgradeMenuButton = getElement<HTMLButtonElement>("storageUpgradeMenuButton");
 const writeViewButton = getElement<HTMLButtonElement>("writeViewButton");
 const feedViewButton = getElement<HTMLButtonElement>("feedViewButton");
 const overviewViewButton = getElement<HTMLButtonElement>("overviewViewButton");
@@ -281,15 +327,27 @@ const entryCount = getElement<HTMLElement>("entryCount");
 const habitStats = getElement<HTMLElement>("habitStats");
 const calendarList = getElement<HTMLElement>("calendarList");
 const diffSummary = getElement<HTMLElement>("diffSummary");
-const storageNotice = getElement<HTMLElement>("storageNotice");
-const storageNoticeDontShow = getElement<HTMLInputElement>("storageNoticeDontShow");
-const storageNoticeClose = getElement<HTMLButtonElement>("storageNoticeClose");
+const changelogButton = getElement<HTMLButtonElement>("changelogButton");
+const changelogDialog = getElement<HTMLElement>("changelogDialog");
+const changelogList = getElement<HTMLElement>("changelogList");
+const changelogCloseButton = getElement<HTMLButtonElement>("changelogCloseButton");
 const importConfirm = getElement<HTMLElement>("importConfirm");
 const importStatus = getElement<HTMLElement>("importStatus");
 const importCancelButton = getElement<HTMLButtonElement>("importCancelButton");
 const importConfirmButton = getElement<HTMLButtonElement>("importConfirmButton");
+const storageDialog = getElement<HTMLElement>("storageDialog");
+const storageDialogKicker = getElement<HTMLElement>("storageDialogKicker");
+const storageDialogTitle = getElement<HTMLElement>("storageDialogTitle");
+const storageDialogBodyPrimary = getElement<HTMLElement>("storageDialogBodyPrimary");
+const storageDialogBodySecondary = getElement<HTMLElement>("storageDialogBodySecondary");
+const storageDialogStatus = getElement<HTMLElement>("storageDialogStatus");
+const storageDialogDontShow = getElement<HTMLInputElement>("storageDialogDontShow");
+const storageDialogSecondaryButton = getElement<HTMLButtonElement>("storageDialogSecondaryButton");
+const storageDialogPrimaryButton = getElement<HTMLButtonElement>("storageDialogPrimaryButton");
+const storageHealthLight = getElement<HTMLButtonElement>("storageHealthLight");
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let themePreference = loadThemePreference();
+let storageDialogMode: StorageDialogMode = "notice";
 
 applyThemePreference();
 
@@ -395,6 +453,11 @@ exportZipButton.addEventListener("click", () => {
   void exportZipBackup();
 });
 
+storageUpgradeMenuButton.addEventListener("click", () => {
+  closeExportMenu();
+  showStorageUpgradePrompt();
+});
+
 importZipButton.addEventListener("click", () => {
   closeExportMenu();
   importZipInput.click();
@@ -416,13 +479,6 @@ document.addEventListener("click", (event) => {
   }
 });
 
-storageNoticeClose.addEventListener("click", () => {
-  if (storageNoticeDontShow.checked) {
-    localStorage.setItem(storageNoticeKey, "true");
-  }
-  storageNotice.classList.add("hidden");
-});
-
 importCancelButton.addEventListener("click", () => {
   pendingImportFile = null;
   importConfirm.classList.add("hidden");
@@ -431,6 +487,41 @@ importCancelButton.addEventListener("click", () => {
 importConfirmButton.addEventListener("click", () => {
   if (pendingImportFile) {
     void importZipBackup(pendingImportFile);
+  }
+});
+
+changelogButton.addEventListener("click", () => {
+  showChangelogDialog();
+});
+
+changelogCloseButton.addEventListener("click", () => {
+  markChangelogSeen();
+  changelogDialog.classList.add("hidden");
+});
+
+storageDialogSecondaryButton.addEventListener("click", () => {
+  if (storageDialogMode === "upgrade" && storageDialogDontShow.checked) {
+    dismissOpfsUpgradePrompt();
+    refreshStorageUpgradeEntry();
+  }
+  storageDialog.classList.add("hidden");
+});
+
+storageDialogPrimaryButton.addEventListener("click", () => {
+  if (storageDialogMode === "upgrade") {
+    void runStorageUpgrade();
+    return;
+  }
+
+  if (storageDialogDontShow.checked) {
+    localStorage.setItem(storageNoticeKey, "true");
+  }
+  storageDialog.classList.add("hidden");
+});
+
+storageHealthLight.addEventListener("click", () => {
+  if (!isOpfsStorageActive() && canOfferOpfsUpgrade()) {
+    showStorageUpgradePrompt();
   }
 });
 
@@ -465,7 +556,16 @@ unlockHistoryEditButton.addEventListener("click", () => {
 });
 
 render();
-showStorageNoticeIfNeeded();
+refreshStorageUpgradeEntry();
+refreshStorageHealthLight();
+if (shouldShowOpfsUpgradePrompt()) {
+  showStorageUpgradePrompt();
+} else if (shouldShowChangelogOnLaunch()) {
+  showChangelogDialog();
+} else {
+  showStorageNoticeIfNeeded();
+}
+void hydrateActiveStorage();
 
 function render(): void {
   const activeEntry = getActiveEntry(state);
@@ -516,6 +616,21 @@ function render(): void {
   renderDailySummary(activeEntry);
   renderFeed();
   renderOverview();
+}
+
+async function hydrateActiveStorage(): Promise<void> {
+  const opfsState = await hydrateOpfsStorage(state);
+  if (!opfsState) {
+    return;
+  }
+
+  state = ensureTodayEntry(opfsState);
+  selectedVersionId = getActiveEntry(state).current_version_id;
+  detailMode = "writing";
+  historyEditUnlockedEntryId = null;
+  persistState(state);
+  refreshStorageHealthLight();
+  render();
 }
 
 function loadThemePreference(): ThemePreference {
@@ -573,11 +688,91 @@ function showThemeHint(label: string): void {
 }
 
 function showStorageNoticeIfNeeded(): void {
-  if (localStorage.getItem(storageNoticeKey) === "true") {
+  if (isOpfsStorageActive() || localStorage.getItem(storageNoticeKey) === "true") {
     return;
   }
 
-  storageNotice.classList.remove("hidden");
+  showStorageDialog("notice");
+}
+
+function shouldShowChangelogOnLaunch(): boolean {
+  return localStorage.getItem(changelogSeenVersionKey) !== getLatestChangelogVersion();
+}
+
+function showChangelogDialog(): void {
+  renderChangelog();
+  changelogDialog.classList.remove("hidden");
+}
+
+function markChangelogSeen(): void {
+  localStorage.setItem(changelogSeenVersionKey, getLatestChangelogVersion());
+}
+
+function getLatestChangelogVersion(): string {
+  return changelog[0]?.version ?? "";
+}
+
+function renderChangelog(): void {
+  changelogList.innerHTML = changelog
+    .map(
+      (entry) => `
+        <article class="changelog-entry">
+          <div class="changelog-entry-head">
+            <strong>${escapeHtml(entry.version)}</strong>
+            <span>${escapeHtml(entry.date)}</span>
+          </div>
+          <h3>${escapeHtml(entry.title)}</h3>
+          <ul>
+            ${entry.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+          </ul>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function showStorageUpgradePrompt(): void {
+  showStorageDialog("upgrade");
+}
+
+function showStorageDialog(mode: StorageDialogMode): void {
+  storageDialogMode = mode;
+  storageDialogDontShow.checked = false;
+  storageDialogStatus.classList.add("hidden");
+  storageDialogStatus.textContent = "";
+  storageDialogPrimaryButton.disabled = false;
+  storageDialogSecondaryButton.disabled = false;
+  storageDialogSecondaryButton.classList.toggle("hidden", mode === "notice");
+
+  if (mode === "upgrade") {
+    storageDialogKicker.textContent = "Storage Upgrade";
+    storageDialogTitle.textContent = "升级本地存储，支持更大的写作档案";
+    storageDialogBodyPrimary.textContent = "当前文章保存在浏览器 localStorage。升级后会迁移到浏览器私有本地文件存储，仍然只保存在当前浏览器，不会上传。";
+    storageDialogBodySecondary.textContent = "升级前会自动下载完整数据 ZIP。升级失败会继续使用原来的本地数据。";
+    storageDialogSecondaryButton.textContent = "先不升级";
+    storageDialogPrimaryButton.textContent = "马上升级";
+  } else {
+    storageDialogKicker.textContent = "Local Storage";
+    storageDialogTitle.textContent = "写作内容只保存在当前浏览器";
+    storageDialogBodyPrimary.textContent = "“逐字”不会把文章上传到云端，也不会保存到项目目录。你的内容保存在当前浏览器、当前访问地址对应的本地存储中。换浏览器、换地址、清理站点数据或使用无痕模式，都可能导致内容不可见。";
+    storageDialogBodySecondary.textContent = "认真写作前，建议定期使用“导出 → 完整数据 ZIP”备份。";
+    storageDialogPrimaryButton.textContent = "我知道了";
+  }
+
+  storageDialog.classList.remove("hidden");
+}
+
+function refreshStorageUpgradeEntry(): void {
+  storageUpgradeMenuButton.classList.toggle("hidden", !canOfferOpfsUpgrade());
+}
+
+function refreshStorageHealthLight(): void {
+  const active = isOpfsStorageActive();
+  const label = active ? "OPFS 已启用" : "OPFS 未启用";
+  storageHealthLight.classList.toggle("storage-health-light-green", active);
+  storageHealthLight.classList.toggle("storage-health-light-red", !active);
+  storageHealthLight.setAttribute("aria-label", label);
+  storageHealthLight.title = canOfferOpfsUpgrade() && !active ? `${label}，点击升级` : label;
 }
 
 function showImportConfirm(): void {
@@ -1022,6 +1217,27 @@ async function exportZipBackup(): Promise<void> {
   downloadBlob(blob, `逐字-备份-${todayKey()}.zip`);
 }
 
+async function runStorageUpgrade(): Promise<void> {
+  storageDialogPrimaryButton.disabled = true;
+  storageDialogSecondaryButton.disabled = true;
+  showStorageUpgradeStatus("正在下载备份并升级本地存储...", "info");
+
+  try {
+    await exportZipBackup();
+    await upgradeToOpfsStorage(state);
+    showStorageUpgradeStatus("升级完成。后续会优先使用新的本地存储，并继续保留兼容备份。", "info");
+    refreshStorageUpgradeEntry();
+    refreshStorageHealthLight();
+    window.setTimeout(() => {
+      storageDialog.classList.add("hidden");
+    }, 1200);
+  } catch {
+    storageDialogPrimaryButton.disabled = false;
+    storageDialogSecondaryButton.disabled = false;
+    showStorageUpgradeStatus("升级失败，已继续保留原来的本地数据。可以先导出 ZIP 后稍后再试。", "error");
+  }
+}
+
 async function importZipBackup(file: File): Promise<void> {
   importStatus.classList.add("hidden");
   importStatus.textContent = "";
@@ -1036,14 +1252,15 @@ async function importZipBackup(file: File): Promise<void> {
     }
 
     const raw = await dataFile.async("string");
-    const parsed = JSON.parse(raw) as { preferences?: { theme?: string }; state?: AppState };
-    if (!parsed.state || !Array.isArray(parsed.state.entries) || typeof parsed.state.active_entry_id !== "string") {
+    const parsed = JSON.parse(raw) as { preferences?: { theme?: string } };
+    const importedState = parseImportedState(parsed);
+    if (!importedState) {
       showImportStatus("备份数据格式不正确。", "error");
       importConfirmButton.disabled = false;
       return;
     }
 
-    state = ensureTodayEntry(normalizeState(parsed.state));
+    state = ensureTodayEntry(importedState);
     persistState(state);
     if (parsed.preferences?.theme) {
       themePreference = parseThemePreference(parsed.preferences.theme);
@@ -1057,6 +1274,8 @@ async function importZipBackup(file: File): Promise<void> {
     view = "write";
     importConfirm.classList.add("hidden");
     importConfirmButton.disabled = false;
+    refreshStorageUpgradeEntry();
+    refreshStorageHealthLight();
     render();
   } catch {
     showImportStatus("导入失败，请确认 ZIP 文件来自逐字。", "error");
@@ -1067,6 +1286,11 @@ async function importZipBackup(file: File): Promise<void> {
 function showImportStatus(message: string, tone: "error" | "info"): void {
   importStatus.textContent = message;
   importStatus.className = `inline-status ${tone}`;
+}
+
+function showStorageUpgradeStatus(message: string, tone: "error" | "info"): void {
+  storageDialogStatus.textContent = message;
+  storageDialogStatus.className = `inline-status ${tone}`;
 }
 
 function renderEntryMarkdown(entry: DailyEntry): string {

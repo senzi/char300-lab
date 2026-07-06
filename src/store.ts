@@ -4,6 +4,24 @@ import { getTokenStats } from "./tokenizer";
 
 const storageKey = "char300-lab-state-v2";
 const legacyStorageKey = "char300-lab-state-v1";
+const opfsUpgradeKey = "char300-lab-opfs-upgrade-v1";
+const opfsUpgradeDismissedKey = "char300-lab-opfs-upgrade-dismissed-v1";
+const opfsDirectoryName = "char300";
+const opfsCheckpointName = "checkpoint.json";
+const opfsMetaName = "meta.json";
+
+type LegacySingleEntryState = {
+  entry?: Partial<DailyEntry>;
+  versions?: Version[];
+  draft?: string;
+  lastSavedContent?: string;
+};
+
+type OpfsUpgradeState = "upgraded" | "failed";
+
+let hadLegacyArticleDataAtStartup = false;
+let opfsWriteEnabled = false;
+let opfsStorageHealthy = false;
 
 export function todayKey(): string {
   return dateKey(new Date());
@@ -52,6 +70,10 @@ export function createEmptyState(): AppState {
 export function loadState(): AppState {
   const raw = localStorage.getItem(storageKey);
   if (raw) {
+    const alreadyUpgraded = localStorage.getItem(opfsUpgradeKey) === "upgraded";
+    hadLegacyArticleDataAtStartup = !alreadyUpgraded;
+    opfsWriteEnabled = false;
+    opfsStorageHealthy = false;
     try {
       const normalized = normalizeState(JSON.parse(raw) as AppState);
       persistState(normalized);
@@ -63,28 +85,17 @@ export function loadState(): AppState {
 
   const legacyRaw = localStorage.getItem(legacyStorageKey);
   if (!legacyRaw) {
+    opfsWriteEnabled = isOpfsSupported();
+    opfsStorageHealthy = opfsWriteEnabled;
     return createEmptyState();
   }
 
+  const alreadyUpgraded = localStorage.getItem(opfsUpgradeKey) === "upgraded";
+  hadLegacyArticleDataAtStartup = !alreadyUpgraded;
+  opfsWriteEnabled = false;
+  opfsStorageHealthy = false;
   try {
-    const legacy = JSON.parse(legacyRaw) as {
-      entry?: Partial<DailyEntry>;
-      versions?: Version[];
-      draft?: string;
-      lastSavedContent?: string;
-    };
-    const createdAt = legacy.entry?.created_at ?? new Date().toISOString();
-    const key = dateKey(new Date(createdAt));
-    const entry: DailyEntry = {
-      ...createEntry(key, createdAt),
-      ...legacy.entry,
-      date_key: key,
-      optional_title: key,
-      versions: legacy.versions ?? [],
-      draft: legacy.draft ?? legacy.lastSavedContent ?? "",
-      lastSavedContent: legacy.lastSavedContent ?? legacy.draft ?? ""
-    };
-    const migrated = normalizeState({ entries: [entry], active_entry_id: entry.entry_id });
+    const migrated = normalizeLegacySingleEntryState(JSON.parse(legacyRaw) as LegacySingleEntryState);
     persistState(migrated);
     return migrated;
   } catch {
@@ -94,6 +105,15 @@ export function loadState(): AppState {
 
 export function persistState(state: AppState): void {
   localStorage.setItem(storageKey, JSON.stringify(state));
+  if (opfsWriteEnabled) {
+    void writeOpfsState(state)
+      .then(() => {
+        opfsStorageHealthy = true;
+      })
+      .catch(() => {
+        opfsStorageHealthy = false;
+      });
+  }
 }
 
 export function ensureTodayEntry(state: AppState): AppState {
@@ -154,6 +174,80 @@ export function resetState(): AppState {
   return state;
 }
 
+export function shouldShowOpfsUpgradePrompt(): boolean {
+  return isOpfsSupported() && hadLegacyArticleDataAtStartup && localStorage.getItem(opfsUpgradeKey) !== "upgraded" && localStorage.getItem(opfsUpgradeDismissedKey) !== "true";
+}
+
+export function canOfferOpfsUpgrade(): boolean {
+  return isOpfsSupported() && hadLegacyArticleDataAtStartup && localStorage.getItem(opfsUpgradeKey) !== "upgraded";
+}
+
+export function isOpfsStorageActive(): boolean {
+  return opfsWriteEnabled && opfsStorageHealthy;
+}
+
+export function dismissOpfsUpgradePrompt(): void {
+  localStorage.setItem(opfsUpgradeDismissedKey, "true");
+}
+
+export async function hydrateOpfsStorage(currentState: AppState): Promise<AppState | null> {
+  if (!isOpfsSupported() || localStorage.getItem(opfsUpgradeKey) !== "upgraded") {
+    return null;
+  }
+
+  try {
+    const stored = await readOpfsState();
+    opfsWriteEnabled = true;
+    opfsStorageHealthy = true;
+    if (!stored) {
+      await writeOpfsState(currentState);
+      return null;
+    }
+
+    localStorage.setItem(storageKey, JSON.stringify(stored));
+    return stored;
+  } catch {
+    opfsWriteEnabled = false;
+    opfsStorageHealthy = false;
+    return null;
+  }
+}
+
+export async function upgradeToOpfsStorage(state: AppState): Promise<void> {
+  const normalized = normalizeState(state);
+  await writeOpfsState(normalized);
+  const stored = await readOpfsState();
+  if (!stored || !statesAreEquivalent(normalized, stored)) {
+    localStorage.setItem(opfsUpgradeKey, "failed" satisfies OpfsUpgradeState);
+    throw new Error("OPFS verification failed");
+  }
+
+  opfsWriteEnabled = true;
+  opfsStorageHealthy = true;
+  localStorage.setItem(opfsUpgradeKey, "upgraded" satisfies OpfsUpgradeState);
+  localStorage.removeItem(opfsUpgradeDismissedKey);
+  persistState(normalized);
+}
+
+export function parseImportedState(payload: unknown): AppState | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const maybeWrapped = payload as { state?: unknown };
+  const candidate = maybeWrapped.state ?? payload;
+  if (isAppStateLike(candidate)) {
+    return normalizeState(candidate as AppState);
+  }
+
+  const maybeLegacy = candidate as LegacySingleEntryState;
+  if (maybeLegacy.entry || maybeLegacy.versions || typeof maybeLegacy.draft === "string" || typeof maybeLegacy.lastSavedContent === "string") {
+    return normalizeLegacySingleEntryState(maybeLegacy);
+  }
+
+  return null;
+}
+
 export function saveVersion(state: AppState): AppState {
   return updateActiveEntry(state, (entry) => {
     const content = entry.draft;
@@ -206,6 +300,75 @@ export function normalizeState(state: AppState): AppState {
     entries,
     active_entry_id: active.entry_id
   };
+}
+
+function normalizeLegacySingleEntryState(legacy: LegacySingleEntryState): AppState {
+  const createdAt = legacy.entry?.created_at ?? new Date().toISOString();
+  const key = dateKey(new Date(createdAt));
+  const entry: DailyEntry = {
+    ...createEntry(key, createdAt),
+    ...legacy.entry,
+    date_key: key,
+    optional_title: legacy.entry?.optional_title ?? key,
+    versions: legacy.versions ?? legacy.entry?.versions ?? [],
+    draft: legacy.draft ?? legacy.lastSavedContent ?? "",
+    lastSavedContent: legacy.lastSavedContent ?? legacy.draft ?? ""
+  };
+  return normalizeState({ entries: [entry], active_entry_id: entry.entry_id });
+}
+
+function isAppStateLike(value: unknown): value is AppState {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const maybeState = value as Partial<AppState>;
+  return Array.isArray(maybeState.entries) && typeof maybeState.active_entry_id === "string";
+}
+
+function isOpfsSupported(): boolean {
+  return typeof navigator !== "undefined" && typeof navigator.storage?.getDirectory === "function";
+}
+
+async function getOpfsDirectory(): Promise<FileSystemDirectoryHandle> {
+  const root = await navigator.storage.getDirectory();
+  return root.getDirectoryHandle(opfsDirectoryName, { create: true });
+}
+
+async function writeOpfsState(state: AppState): Promise<void> {
+  const dir = await getOpfsDirectory();
+  await writeTextFile(dir, opfsCheckpointName, JSON.stringify(normalizeState(state)));
+  await writeTextFile(
+    dir,
+    opfsMetaName,
+    JSON.stringify({
+      schema_version: 2,
+      upgraded_at: new Date().toISOString(),
+      storage: "opfs-checkpoint"
+    })
+  );
+}
+
+async function readOpfsState(): Promise<AppState | null> {
+  try {
+    const dir = await getOpfsDirectory();
+    const fileHandle = await dir.getFileHandle(opfsCheckpointName);
+    const file = await fileHandle.getFile();
+    return normalizeState(JSON.parse(await file.text()) as AppState);
+  } catch {
+    return null;
+  }
+}
+
+async function writeTextFile(dir: FileSystemDirectoryHandle, name: string, content: string): Promise<void> {
+  const fileHandle = await dir.getFileHandle(name, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(content);
+  await writable.close();
+}
+
+function statesAreEquivalent(left: AppState, right: AppState): boolean {
+  return JSON.stringify(normalizeState(left)) === JSON.stringify(normalizeState(right));
 }
 
 function normalizeEntry(entry: DailyEntry): DailyEntry {
