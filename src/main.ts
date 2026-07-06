@@ -12,9 +12,20 @@ const storageNoticeKey = "zhuzi-storage-notice-dismissed-v1";
 const themePreferenceKey = "zhuzi-theme-preference-v1";
 const writingYearGoalDays = 365;
 
-type View = "write" | "feed";
+type View = "write" | "feed" | "overview";
 type DetailMode = "writing" | "version";
 type ThemePreference = "auto" | "light" | "dark";
+type OverviewDay = {
+  key: string;
+  state: "written" | "absent" | "future";
+  articles: number;
+  wordCount: number;
+  versions: number;
+  inserted: number;
+  deleted: number;
+  churn: number;
+  compression: number | null;
+};
 type CardChip =
   | { kind: "diff"; label: string; inserted: number; deleted: number; width: number }
   | { kind: "plain"; label: string; value: string; width: number };
@@ -68,6 +79,7 @@ app.innerHTML = `
       <div class="segmented" role="tablist" aria-label="主视图">
         <button id="writeViewButton" type="button">写作</button>
         <button id="feedViewButton" type="button">阅读流</button>
+        <button id="overviewViewButton" type="button">总览</button>
       </div>
       <div class="theme-inline">
         <span class="theme-hint hidden" id="themeHint" aria-live="polite"></span>
@@ -163,6 +175,33 @@ app.innerHTML = `
       </div>
       <div class="feed-list" id="feedList"></div>
     </section>
+    <section class="overview-view hidden" id="overviewView">
+      <div class="overview-hero">
+        <div>
+          <p class="panel-kicker">Overview</p>
+          <h2>总览</h2>
+        </div>
+        <div class="overview-actions">
+          <span id="overviewRange"></span>
+          <button class="button ghost small" id="exportOverviewImageButton" type="button">下载图片</button>
+        </div>
+      </div>
+      <div class="overview-summary" id="overviewSummary"></div>
+      <section class="overview-board">
+        <div class="overview-section-head">
+          <h3>年度格</h3>
+          <span id="overviewGridMeta"></span>
+        </div>
+        <div class="year-grid" id="overviewYearGrid" aria-label="365 天写作矩阵"></div>
+      </section>
+      <section class="overview-board">
+        <div class="overview-section-head">
+          <h3>每日数据</h3>
+          <span>按已推进日期展示，不含正文</span>
+        </div>
+        <div class="overview-bars" id="overviewBars"></div>
+      </section>
+    </section>
     <footer class="app-footer">
       <a href="https://github.com/senzi/char300-lab" target="_blank" rel="noreferrer">Github</a>
       <span aria-hidden="true">|</span>
@@ -217,12 +256,20 @@ const importZipButton = getElement<HTMLButtonElement>("importZipButton");
 const importZipInput = getElement<HTMLInputElement>("importZipInput");
 const writeViewButton = getElement<HTMLButtonElement>("writeViewButton");
 const feedViewButton = getElement<HTMLButtonElement>("feedViewButton");
+const overviewViewButton = getElement<HTMLButtonElement>("overviewViewButton");
 const editor = getElement<HTMLTextAreaElement>("editor");
 const reader = getElement<HTMLElement>("reader");
 const writingWorkspace = getElement<HTMLElement>("writingWorkspace");
 const feedView = getElement<HTMLElement>("feedView");
+const overviewView = getElement<HTMLElement>("overviewView");
 const feedList = getElement<HTMLElement>("feedList");
 const feedRange = getElement<HTMLElement>("feedRange");
+const overviewRange = getElement<HTMLElement>("overviewRange");
+const exportOverviewImageButton = getElement<HTMLButtonElement>("exportOverviewImageButton");
+const overviewSummary = getElement<HTMLElement>("overviewSummary");
+const overviewGridMeta = getElement<HTMLElement>("overviewGridMeta");
+const overviewYearGrid = getElement<HTMLElement>("overviewYearGrid");
+const overviewBars = getElement<HTMLElement>("overviewBars");
 const historyEditNotice = getElement<HTMLElement>("historyEditNotice");
 const unlockHistoryEditButton = getElement<HTMLButtonElement>("unlockHistoryEditButton");
 const practiceTabs = getElement<HTMLElement>("practiceTabs");
@@ -345,6 +392,10 @@ exportZipButton.addEventListener("click", () => {
   void exportZipBackup();
 });
 
+exportOverviewImageButton.addEventListener("click", () => {
+  void exportOverviewCard();
+});
+
 importZipButton.addEventListener("click", () => {
   closeExportMenu();
   importZipInput.click();
@@ -400,6 +451,11 @@ feedViewButton.addEventListener("click", () => {
   render();
 });
 
+overviewViewButton.addEventListener("click", () => {
+  view = "overview";
+  render();
+});
+
 unlockHistoryEditButton.addEventListener("click", () => {
   const activeEntry = getActiveEntry(state);
   if (!isTodayEntry(activeEntry)) {
@@ -427,8 +483,10 @@ function render(): void {
   document.body.classList.toggle("over-limit", overLimit);
   writeViewButton.classList.toggle("active", view === "write");
   feedViewButton.classList.toggle("active", view === "feed");
-  writingWorkspace.classList.toggle("hidden", view === "feed");
-  feedView.classList.toggle("hidden", view === "write");
+  overviewViewButton.classList.toggle("active", view === "overview");
+  writingWorkspace.classList.toggle("hidden", view !== "write");
+  feedView.classList.toggle("hidden", view !== "feed");
+  overviewView.classList.toggle("hidden", view !== "overview");
   editor.classList.toggle("hidden", detailMode === "version");
   reader.classList.toggle("hidden", detailMode === "writing");
   historyEditNotice.classList.toggle("hidden", !isHistoricalWriting || canEdit);
@@ -458,6 +516,7 @@ function render(): void {
   renderReader(activeEntry);
   renderDailySummary(activeEntry);
   renderFeed();
+  renderOverview();
 }
 
 function loadThemePreference(): ThemePreference {
@@ -741,6 +800,161 @@ function renderFeed(): void {
   });
 }
 
+function renderOverview(): void {
+  const days = getOverviewDays();
+  const writtenDays = days.filter((day) => day.state === "written");
+  const elapsedDays = days.filter((day) => day.state !== "future");
+  const absentDays = days.filter((day) => day.state === "absent");
+  const articleCount = getWrittenEntries().length;
+  const versionTotal = writtenDays.reduce((total, day) => total + day.versions, 0);
+  const wordTotal = writtenDays.reduce((total, day) => total + day.wordCount, 0);
+  const insertedTotal = writtenDays.reduce((total, day) => total + day.inserted, 0);
+  const deletedTotal = writtenDays.reduce((total, day) => total + day.deleted, 0);
+  const averageDailyWords = writtenDays.length ? Math.round(wordTotal / writtenDays.length) : 0;
+  const averageArticleWords = articleCount ? Math.round(wordTotal / articleCount) : 0;
+  const averageVersions = writtenDays.length ? (versionTotal / writtenDays.length).toFixed(1) : "0.0";
+  const bestChurnDay = [...writtenDays].sort((left, right) => right.churn - left.churn)[0];
+  const intensityMax = Math.max(...days.map((day) => day.churn), 1);
+  const wordMax = Math.max(...days.map((day) => day.wordCount), 300, 1);
+  const versionMax = Math.max(...days.map((day) => day.versions), 1);
+
+  overviewRange.textContent = `${days[0]?.key ?? todayKey()} 至 ${days.at(-1)?.key ?? todayKey()}`;
+  overviewSummary.innerHTML = `
+    <div><strong>${writtenDays.length}</strong><span>写作天数</span></div>
+    <div><strong>${articleCount}</strong><span>文字篇数</span></div>
+    <div><strong>${elapsedDays.length}</strong><span>已推进天数</span></div>
+    <div><strong>${absentDays.length}</strong><span>缺席天数</span></div>
+    <div><strong>${versionTotal}</strong><span>累计版本</span></div>
+    <div><strong>${averageDailyWords}</strong><span>日均总字数</span></div>
+    <div><strong>${averageArticleWords}</strong><span>篇均终稿字数</span></div>
+    <div><strong>${averageVersions}</strong><span>日均版本</span></div>
+  `;
+  overviewGridMeta.textContent = `${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 +${insertedTotal} -${deletedTotal}`;
+  overviewYearGrid.innerHTML = days
+    .map((day, index) => {
+      const level = getOverviewLevel(day, intensityMax);
+      const title = `${day.key} · ${formatOverviewDayTitle(day)}`;
+      return `<span class="year-cell ${day.state} level-${level}" title="${title}" aria-label="${title}" data-index="${index}"></span>`;
+    })
+    .join("");
+
+  overviewBars.innerHTML = [
+    renderOverviewBarTrack("日总字数", elapsedDays, wordMax, (day) => day.wordCount, (day) => `${day.wordCount}字 · ${day.articles}篇`),
+    renderOverviewBarTrack("日版本", elapsedDays, versionMax, (day) => day.versions, (day) => `${day.versions}版 · ${day.articles}篇`),
+    renderOverviewBarTrack("日修改量", elapsedDays, intensityMax, (day) => day.churn, (day) => `+${day.inserted} -${day.deleted}`),
+    `<div class="overview-callout">
+      <strong>修改量最高</strong>
+      <span>${bestChurnDay ? `${formatShortDate(bestChurnDay.key)} · +${bestChurnDay.inserted} -${bestChurnDay.deleted}` : "保存版本后，这里会出现当日修改量。"}</span>
+    </div>`
+  ].join("");
+}
+
+function renderOverviewBarTrack(
+  label: string,
+  days: OverviewDay[],
+  maxValue: number,
+  getValue: (day: OverviewDay) => number,
+  getTitle: (day: OverviewDay) => string
+): string {
+  return `
+    <div class="overview-track">
+      <span>${label}</span>
+      <div style="--day-count: ${Math.max(days.length, 1)}">
+        ${days
+          .map((day) => {
+            const value = getValue(day);
+            const height = day.state === "future" || value === 0 ? 2 : Math.max(4, Math.round((value / maxValue) * 28));
+            const title = `${day.key} · ${getTitle(day)}`;
+            return `<i class="${day.state}" style="height: ${height}px" title="${title}" aria-label="${title}"></i>`;
+          })
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+async function exportOverviewCard(): Promise<void> {
+  await document.fonts.ready;
+  const days = getOverviewDays();
+  const writtenDays = days.filter((day) => day.state === "written");
+  const elapsedDays = days.filter((day) => day.state !== "future");
+  const absentDays = days.filter((day) => day.state === "absent");
+  const articleCount = getWrittenEntries().length;
+  const versionTotal = writtenDays.reduce((total, day) => total + day.versions, 0);
+  const wordTotal = writtenDays.reduce((total, day) => total + day.wordCount, 0);
+  const insertedTotal = writtenDays.reduce((total, day) => total + day.inserted, 0);
+  const deletedTotal = writtenDays.reduce((total, day) => total + day.deleted, 0);
+  const averageDailyWords = writtenDays.length ? Math.round(wordTotal / writtenDays.length) : 0;
+  const averageArticleWords = articleCount ? Math.round(wordTotal / articleCount) : 0;
+  const averageVersions = writtenDays.length ? (versionTotal / writtenDays.length).toFixed(1) : "0.0";
+  const bestChurnDay = [...writtenDays].sort((left, right) => right.churn - left.churn)[0];
+  const intensityMax = Math.max(...days.map((day) => day.churn), 1);
+  const wordMax = Math.max(...elapsedDays.map((day) => day.wordCount), 300, 1);
+  const versionMax = Math.max(...elapsedDays.map((day) => day.versions), 1);
+  const scale = 2;
+  const width = 1280;
+  const height = 920;
+  const canvas = document.createElement("canvas");
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+
+  ctx.scale(scale, scale);
+  ctx.fillStyle = "#f7f4ed";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#1c1c1c";
+  ctx.font = cardFont(38);
+  ctx.fillText("逐字总览", 64, 86);
+  ctx.fillStyle = "rgba(28,28,28,0.56)";
+  ctx.font = cardFont(24);
+  ctx.fillText(`${days[0]?.key ?? todayKey()} 至 ${days.at(-1)?.key ?? todayKey()}`, 64, 124);
+  ctx.fillText(appSlogan, 64, 846);
+
+  drawOverviewCardStats(ctx, [
+    ["写作天数", String(writtenDays.length)],
+    ["文字篇数", String(articleCount)],
+    ["已推进天数", String(elapsedDays.length)],
+    ["缺席天数", String(absentDays.length)],
+    ["累计版本", String(versionTotal)],
+    ["日均总字数", String(averageDailyWords)],
+    ["篇均终稿字数", String(averageArticleWords)],
+    ["日均版本", averageVersions]
+  ]);
+
+  ctx.fillStyle = "#1c1c1c";
+  ctx.font = cardFont(26);
+  ctx.fillText("年度格", 64, 322);
+  ctx.fillStyle = "rgba(28,28,28,0.56)";
+  ctx.font = cardFont(20);
+  ctx.fillText(`${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 +${insertedTotal} -${deletedTotal}`, 168, 322);
+  drawOverviewCardGrid(ctx, days, intensityMax, 64, 346);
+
+  ctx.fillStyle = "#1c1c1c";
+  ctx.font = cardFont(26);
+  ctx.fillText("每日数据", 64, 508);
+  ctx.fillStyle = "rgba(28,28,28,0.56)";
+  ctx.font = cardFont(20);
+  ctx.fillText("按已推进日期展示，不含正文", 186, 508);
+  drawOverviewCardTrack(ctx, "日总字数", elapsedDays, wordMax, (day) => day.wordCount, 64, 548);
+  drawOverviewCardTrack(ctx, "日版本", elapsedDays, versionMax, (day) => day.versions, 64, 626);
+  drawOverviewCardTrack(ctx, "日修改量", elapsedDays, intensityMax, (day) => day.churn, 64, 704);
+
+  drawSoftPill(ctx, 64, 778, 520, 48);
+  ctx.fillStyle = "#1c1c1c";
+  ctx.font = cardFont(22);
+  ctx.fillText("修改量最高", 88, 809);
+  ctx.fillStyle = "rgba(28,28,28,0.62)";
+  ctx.fillText(bestChurnDay ? `${formatShortDate(bestChurnDay.key)} · +${bestChurnDay.inserted} -${bestChurnDay.deleted}` : "保存版本后显示当日修改量", 220, 809);
+
+  const link = document.createElement("a");
+  link.download = `zhuzi-overview-${todayKey()}.png`;
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+}
+
 function exportDayMarkdown(entry: DailyEntry): void {
   const markdown = renderEntryMarkdown(entry);
   downloadBlob(new Blob([markdown], { type: "text/markdown;charset=utf-8" }), `逐字-${entry.date_key}-${slugifyPracticeLabel(entry)}.md`);
@@ -966,6 +1180,94 @@ function getHabitStats(): {
   };
 }
 
+function getOverviewDays(): OverviewDay[] {
+  const writtenKeys = new Set(state.entries.filter((entry) => entry.versions.length > 0).map((entry) => entry.date_key));
+  const firstDay = [...writtenKeys].sort()[0] ?? state.entries.map((entry) => entry.date_key).sort()[0] ?? todayKey();
+  const finalDay = toLocalDateKey(addDays(parseDateKey(firstDay), writingYearGoalDays - 1));
+  const today = todayKey();
+
+  return enumerateDays(firstDay, finalDay).map((key) => {
+    if (!writtenKeys.has(key)) {
+      return {
+        key,
+        state: key <= today ? "absent" : "future",
+        articles: 0,
+        wordCount: 0,
+        versions: 0,
+        inserted: 0,
+        deleted: 0,
+        churn: 0,
+        compression: null
+      };
+    }
+
+    return getOverviewDayMetrics(key);
+  });
+}
+
+function getOverviewDayMetrics(key: string): OverviewDay {
+  const entries = getEntriesForDate(key).filter((entry) => entry.versions.length > 0);
+  let wordCount = 0;
+  let versions = 0;
+  let inserted = 0;
+  let deleted = 0;
+  let firstUnits = 0;
+  let finalUnits = 0;
+
+  for (const entry of entries) {
+    const first = entry.versions[0];
+    const last = entry.versions.at(-1);
+    if (!first || !last) {
+      continue;
+    }
+
+    const summary = summarizeDiff(first.content, last.content);
+    const firstStats = getTokenStats(first.content);
+    const finalStats = getTokenStats(last.content);
+    wordCount += finalStats.total_units;
+    versions += entry.versions.length;
+    inserted += textInsertCount(summary) + summary.punctuation.insert;
+    deleted += textDeleteCount(summary) + summary.punctuation.delete;
+    firstUnits += firstStats.total_units;
+    finalUnits += finalStats.total_units;
+  }
+
+  return {
+    key,
+    state: "written",
+    articles: entries.length,
+    wordCount,
+    versions,
+    inserted,
+    deleted,
+    churn: inserted + deleted,
+    compression: firstUnits > 0 ? finalUnits / firstUnits : null
+  };
+}
+
+function getOverviewLevel(day: OverviewDay, maxChurn: number): number {
+  if (day.state !== "written") {
+    return 0;
+  }
+
+  const expectedWords = Math.max(day.articles, 1) * 300;
+  const score = Math.max(day.wordCount / expectedWords, day.churn / maxChurn, day.versions / Math.max(day.articles * 3, 1));
+  return Math.min(4, Math.max(1, Math.ceil(score * 4)));
+}
+
+function formatOverviewDayTitle(day: OverviewDay): string {
+  if (day.state === "future") {
+    return "预期格";
+  }
+
+  if (day.state === "absent") {
+    return "缺席";
+  }
+
+  const compression = day.compression === null ? "—" : `${Math.round(day.compression * 100)}%`;
+  return `${day.articles}篇 · 共${day.wordCount}字 · ${day.versions}版 · +${day.inserted} -${day.deleted} · 压缩率 ${compression}`;
+}
+
 function getCalendarRows(): Array<{ key: string; written: boolean }> {
   const writtenKeys = new Set(state.entries.filter((entry) => entry.versions.length > 0).map((entry) => entry.date_key));
   const firstEntryDay = state.entries.map((entry) => entry.date_key).sort()[0] ?? todayKey();
@@ -990,6 +1292,12 @@ function enumerateDays(startKey: string, endKey: string): string[] {
 function parseDateKey(key: string): Date {
   const [year, month, day] = key.split("-").map(Number);
   return new Date(year, month - 1, day);
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 function toLocalDateKey(date: Date): string {
@@ -1228,6 +1536,82 @@ function drawCardChip(ctx: CanvasRenderingContext2D, chip: PositionedCardChip): 
   ctx.fillText(insertedText, valueX, chip.y + 36);
   ctx.fillStyle = "#9b3428";
   ctx.fillText(`-${chip.deleted}`, valueX + ctx.measureText(insertedText).width + 16, chip.y + 36);
+}
+
+function drawOverviewCardStats(ctx: CanvasRenderingContext2D, stats: Array<[string, string]>): void {
+  const startX = 64;
+  const startY = 160;
+  const gap = 12;
+  const itemW = 136;
+  const itemH = 84;
+
+  stats.forEach(([label, value], index) => {
+    const x = startX + (index % 4) * (itemW + gap);
+    const y = startY + Math.floor(index / 4) * (itemH + gap);
+    drawSoftPill(ctx, x, y, itemW, itemH);
+    ctx.fillStyle = "#1c1c1c";
+    ctx.font = cardFont(30);
+    ctx.fillText(value, x + 18, y + 36);
+    ctx.fillStyle = "rgba(28,28,28,0.56)";
+    ctx.font = cardFont(19);
+    ctx.fillText(label, x + 18, y + 64);
+  });
+}
+
+function drawOverviewCardGrid(ctx: CanvasRenderingContext2D, days: OverviewDay[], maxChurn: number, x: number, y: number): void {
+  const cell = 12;
+  const gap = 4;
+  days.forEach((day, index) => {
+    const column = Math.floor(index / 7);
+    const row = index % 7;
+    ctx.fillStyle = overviewCellColor(day, getOverviewLevel(day, maxChurn));
+    roundRect(ctx, x + column * (cell + gap), y + row * (cell + gap), cell, cell, 3);
+    ctx.fill();
+  });
+}
+
+function drawOverviewCardTrack(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  days: OverviewDay[],
+  maxValue: number,
+  getValue: (day: OverviewDay) => number,
+  x: number,
+  y: number
+): void {
+  const labelW = 118;
+  const trackW = 1040;
+  const barGap = 2;
+  const count = Math.max(days.length, 1);
+  const barW = Math.max(3, (trackW - (count - 1) * barGap) / count);
+  ctx.fillStyle = "rgba(28,28,28,0.56)";
+  ctx.font = cardFont(20);
+  ctx.fillText(label, x, y + 38);
+  ctx.strokeStyle = "rgba(28,28,28,0.12)";
+  ctx.beginPath();
+  ctx.moveTo(x + labelW, y + 48);
+  ctx.lineTo(x + labelW + trackW, y + 48);
+  ctx.stroke();
+
+  days.forEach((day, index) => {
+    const value = getValue(day);
+    const barH = day.state === "future" || value === 0 ? 3 : Math.max(6, Math.round((value / maxValue) * 42));
+    ctx.fillStyle = day.state === "written" ? "rgba(28,28,28,0.72)" : "rgba(28,28,28,0.18)";
+    roundRect(ctx, x + labelW + index * (barW + barGap), y + 48 - barH, barW, barH, 2);
+    ctx.fill();
+  });
+}
+
+function overviewCellColor(day: OverviewDay, level: number): string {
+  if (day.state === "future") {
+    return "rgba(28,28,28,0.035)";
+  }
+
+  if (day.state === "absent") {
+    return "rgba(28,28,28,0.08)";
+  }
+
+  return ["rgba(40,122,70,0.22)", "rgba(40,122,70,0.38)", "rgba(40,122,70,0.58)", "#287a46"][level - 1] ?? "#287a46";
 }
 
 function wrapTextPreservingBreaks(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
