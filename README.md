@@ -24,9 +24,9 @@
 
 ## 使用方式
 
-### 1. 直接运行网页版
+### 1. 直接运行
 
-适合不想安装或不信任预编译 App 的用户。所有数据保存在当前浏览器的本地存储中。
+逐字是一个纯网页版应用。所有数据保存在当前浏览器的本地存储中。
 
 ```bash
 npm install
@@ -68,7 +68,7 @@ zhuzi-storage-notice-dismissed-v1=true
 
 页脚的“更新日志”可查看完整用户层面的更新说明。首次打开新版本时，如果没有更高优先级的存储升级提示，会自动展示未读更新日志。仓库文本版见 `CHANGELOG.md`。
 
-### 2. 构建静态网页版
+### 2. 构建静态网页
 
 ```bash
 npm install
@@ -85,56 +85,11 @@ npm run preview
 - 如果 CDN 字体加载失败，浏览器会自动回退到 `ui-sans-serif, system-ui, sans-serif`。
 - 因此 Cloudflare Pages 不需要提交 20MB+ 的字体文件，也不会因为 `docs/` 被忽略而构建失败。
 
-### 3. 运行桌面开发版
+## 数据位置
 
-需要本机安装 Rust 和平台相关构建工具。
+逐字的核心逻辑在前端，不需要服务器，也不会主动上传内容。数据保存在当前浏览器对该地址的本地存储中，优先使用 OPFS，并保留 localStorage 作为兼容兜底，不在项目文件夹里。
 
-```bash
-npm install
-npm run tauri -- dev
-```
-
-### 4. 构建桌面 App
-
-macOS：
-
-```bash
-npm install
-npm run tauri -- build
-```
-
-构建产物会出现在：
-
-```text
-src-tauri/target/release/bundle/
-```
-
-Windows 后续也可以用同样方式构建，但需要在 Windows 环境里安装：
-
-- Node.js
-- Rust
-- Microsoft Visual Studio Build Tools
-- WebView2 Runtime
-
-然后执行：
-
-```bash
-npm install
-npm run tauri -- build
-```
-
-## 网页版和桌面版的区别
-
-逐字的核心逻辑在前端，因此可以只用网页版。
-
-区别主要在数据所在位置：
-
-- 网页版：数据保存在当前浏览器对该地址的本地存储中，优先使用 OPFS，并保留 localStorage 作为兼容兜底，不在项目文件夹里。
-- 桌面版：数据保存在 Tauri WebView 的本地存储中。
-
-两者都不需要服务器，也不会主动上传内容。
-
-如果要换设备、换浏览器、从网页版迁移到桌面版，建议使用：
+如果要换设备、换浏览器或更换访问地址，建议使用：
 
 ```text
 导出 → 完整数据 ZIP
@@ -158,7 +113,7 @@ npm run tauri -- build
 
 - 每次写完重要内容后导出一次 ZIP。
 - 至少每周导出一次 ZIP。
-- 换浏览器、换电脑、升级系统、清理浏览器数据、改用桌面版之前，先导出 ZIP。
+- 换浏览器、换电脑、升级系统、清理浏览器数据或更换访问地址之前，先导出 ZIP。
 - ZIP 备份建议放到云盘、Git 私有仓库、NAS 或其他你信任的位置。
 
 完整数据 ZIP 里包含：
@@ -199,8 +154,6 @@ Entry 表示某一天的写作容器；Version 表示每次保存后的完整文
 npm run dev          # 启动网页版开发服务器
 npm run build        # 构建静态网页
 npm run preview      # 预览构建后的网页
-npm run tauri -- dev # 启动桌面开发版
-npm run tauri -- build # 构建桌面 App
 ```
 
 ## 设计参考

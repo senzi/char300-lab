@@ -25,6 +25,4 @@ docs/*
 
 node_modules
 dist
-src-tauri/gen
-src-tauri/target
 .DS_Store
