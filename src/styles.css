@@ -546,6 +546,10 @@ h3 {
   padding: 8px;
 }
 
+.habit-stats .habit-goal {
+  grid-column: 1 / -1;
+}
+
 .habit-stats strong,
 .stats-row strong {
   display: block;

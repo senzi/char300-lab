@@ -8,11 +8,22 @@ import { canOfferOpfsUpgrade, createTodayPractice, deleteEntry, dismissOpfsUpgra
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
+const appUrl = "rewrite.closeai.moe";
 const storageNoticeKey = "zhuzi-storage-notice-dismissed-v1";
 const changelogSeenVersionKey = "zhuzi-changelog-seen-version";
 const themePreferenceKey = "zhuzi-theme-preference-v1";
 const writingYearGoalDays = 365;
+const writingMilestones = [3, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 120, 150, 180, 210, 240, 270, 300, 330, 365];
 const changelog: ChangelogEntry[] = [
+  {
+    version: "0.2.1",
+    date: "2026-07-06",
+    title: "文案与分享卡片优化",
+    items: [
+      "年度目标改为“先坚持一年”，并按已写天数提示下一站。",
+      "文章分享卡片底部新增“逐字”文案和访问地址。"
+    ]
+  },
   {
     version: "0.2.0",
     date: "2026-07-06",
@@ -785,14 +796,22 @@ function showImportConfirm(): void {
 function renderHabitStats(): void {
   const stats = getHabitStats();
   const articleCount = getWrittenEntries().length;
+  const nextMilestone = getNextWritingMilestone(stats.writtenDays);
+  const writingGoalLabel = nextMilestone
+    ? `已写 ${stats.writtenDays} 天，下一站 ${nextMilestone} 天`
+    : `已写 ${stats.writtenDays} 天，年度目标完成`;
   entryCount.textContent = String(stats.writtenDays);
   habitStats.innerHTML = `
-    <div><strong>${stats.writtenDays} / ${writingYearGoalDays}</strong><span>写作天数</span></div>
+    <div class="habit-goal"><strong>先坚持一年</strong><span>${writingGoalLabel}</span></div>
     <div><strong>${articleCount}</strong><span>文字篇数</span></div>
     <div><strong>${stats.absentDays}</strong><span>缺席天数</span></div>
     <div><strong>${stats.currentStreak}</strong><span>当前连击</span></div>
     <div><strong>${stats.maxStreak}</strong><span>最大连击</span></div>
   `;
+}
+
+function getNextWritingMilestone(writtenDays: number): number | null {
+  return writingMilestones.find((milestone) => milestone > writtenDays) ?? null;
 }
 
 function renderPracticeTabs(activeEntry: DailyEntry): void {
@@ -1097,7 +1116,7 @@ async function exportOverviewCard(): Promise<void> {
   const pillHeight = 48;
   const gapAfterPill = 58;
   const sloganLine1 = `${appName}，${appSlogan}`;
-  const sloganLine2 = "rewrite.closeai.moe";
+  const sloganLine2 = appUrl;
   ctx.font = cardFont(24);
   const slogan1Width = ctx.measureText(sloganLine1).width;
   const slogan2Width = ctx.measureText(sloganLine2).width;
@@ -1649,7 +1668,11 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
     cardW - 96
   );
   const signatureY = chipY + chipLayout.height + 50;
-  const cardH = Math.max(620, signatureY + 98 - cardY);
+  const footerLine1 = `${appName}，${appSlogan}`;
+  const footerLine2 = appUrl;
+  const footerLineHeight = 38;
+  const footerStartY = signatureY + 62;
+  const cardH = Math.max(660, footerStartY + footerLineHeight * 2 + 44 - cardY);
   const cardHeight = cardY + cardH + 56;
   canvas.width = cardWidth * scale;
   canvas.height = cardHeight * scale;
@@ -1698,7 +1721,10 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   ctx.fillText(achievementText, cardInnerX, signatureY);
   ctx.fillStyle = "rgba(28,28,28,0.52)";
   ctx.font = cardFont(24);
-  ctx.fillText(`${appName}，${appSlogan}`, cardInnerX, signatureY + 38);
+  const footerLine1Width = ctx.measureText(footerLine1).width;
+  const footerLine2Width = ctx.measureText(footerLine2).width;
+  ctx.fillText(footerLine1, (cardWidth - footerLine1Width) / 2, footerStartY);
+  ctx.fillText(footerLine2, (cardWidth - footerLine2Width) / 2, footerStartY + footerLineHeight);
 
   const link = document.createElement("a");
   link.download = `char300-daily-card-${entry.date_key}-${slugifyPracticeLabel(entry)}.png`;
