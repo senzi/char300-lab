@@ -892,14 +892,27 @@ async function exportOverviewCard(): Promise<void> {
   const versionMax = Math.max(...elapsedDays.map((day) => day.versions), 1);
   const scale = 2;
   const width = 1280;
-  const height = 1040;
   const canvas = document.createElement("canvas");
-  canvas.width = width * scale;
-  canvas.height = height * scale;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
     return;
   }
+
+  const pillY = 870;
+  const pillHeight = 48;
+  const gapAfterPill = 58;
+  const sloganLine1 = `${appName}，${appSlogan}`;
+  const sloganLine2 = "rewrite.closeai.moe";
+  ctx.font = cardFont(24);
+  const slogan1Width = ctx.measureText(sloganLine1).width;
+  const slogan2Width = ctx.measureText(sloganLine2).width;
+  const sloganLineHeight = 40;
+  const sloganStartY = pillY + pillHeight + gapAfterPill;
+  const bottomPadding = 56;
+  const height = sloganStartY + sloganLineHeight * 2 + bottomPadding;
+
+  canvas.width = width * scale;
+  canvas.height = height * scale;
 
   ctx.scale(scale, scale);
   ctx.fillStyle = "#f7f4ed";
@@ -910,7 +923,10 @@ async function exportOverviewCard(): Promise<void> {
   ctx.fillStyle = "rgba(28,28,28,0.56)";
   ctx.font = cardFont(24);
   ctx.fillText(`${days[0]?.key ?? todayKey()} 至 ${days.at(-1)?.key ?? todayKey()}`, 72, 126);
-  ctx.fillText(appSlogan, 72, 964);
+  ctx.fillStyle = "rgba(28,28,28,0.56)";
+  ctx.font = cardFont(24);
+  ctx.fillText(sloganLine1, (width - slogan1Width) / 2, sloganStartY);
+  ctx.fillText(sloganLine2, (width - slogan2Width) / 2, sloganStartY + sloganLineHeight);
 
   drawOverviewCardStats(ctx, [
     ["写作天数", String(writtenDays.length)],
@@ -941,12 +957,29 @@ async function exportOverviewCard(): Promise<void> {
   drawOverviewCardTrack(ctx, "日版本", elapsedDays, versionMax, (day) => day.versions, 72, 732);
   drawOverviewCardTrack(ctx, "日修改量", elapsedDays, intensityMax, (day) => day.churn, 72, 814);
 
-  drawSoftPill(ctx, 72, 894, 520, 48);
+  const pillLabelY = pillY + 31;
+  drawSoftPill(ctx, 72, pillY, 520, pillHeight);
   ctx.fillStyle = "#1c1c1c";
   ctx.font = cardFont(22);
-  ctx.fillText("修改量最高", 96, 925);
-  ctx.fillStyle = "rgba(28,28,28,0.62)";
-  ctx.fillText(bestChurnDay ? `${formatShortDate(bestChurnDay.key)} · +${bestChurnDay.inserted} -${bestChurnDay.deleted}` : "保存版本后显示当日修改量", 228, 925);
+  ctx.fillText("修改量最高", 96, pillLabelY);
+
+  if (bestChurnDay) {
+    const dateStr = `${formatShortDate(bestChurnDay.key)} · `;
+    const insertedStr = `+${bestChurnDay.inserted}`;
+    const deletedStr = ` -${bestChurnDay.deleted}`;
+    let x = 228;
+    ctx.fillStyle = "rgba(28,28,28,0.62)";
+    ctx.fillText(dateStr, x, pillLabelY);
+    x += ctx.measureText(dateStr).width;
+    ctx.fillStyle = "#287a46";
+    ctx.fillText(insertedStr, x, pillLabelY);
+    x += ctx.measureText(insertedStr).width;
+    ctx.fillStyle = "#9b3428";
+    ctx.fillText(deletedStr, x, pillLabelY);
+  } else {
+    ctx.fillStyle = "rgba(28,28,28,0.62)";
+    ctx.fillText("保存版本后显示当日修改量", 228, pillLabelY);
+  }
 
   const link = document.createElement("a");
   link.download = `zhuzi-overview-${todayKey()}.png`;
