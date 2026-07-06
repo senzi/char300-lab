@@ -232,34 +232,13 @@ h2 {
 }
 
 .button:focus-visible,
-.theme-switcher select:focus-visible,
+.theme-icon-button:focus-visible,
 .segmented button:focus-visible,
 .version-item:focus-visible,
 .calendar-day:focus-visible,
 .feed-date:focus-visible {
   outline: 0;
   box-shadow: var(--shadow);
-}
-
-.theme-switcher {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 34px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 9px;
-  color: var(--muted);
-  background: var(--subtle-faint);
-  font-size: 14px;
-}
-
-.theme-switcher select {
-  border: 0;
-  color: var(--text);
-  background: transparent;
-  outline: 0;
-  cursor: pointer;
 }
 
 .button.primary {
@@ -384,6 +363,69 @@ h2 {
 .modebar {
   flex: 0 0 auto;
   margin-bottom: 12px;
+}
+
+.theme-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 34px;
+}
+
+.theme-icon-group {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 34px);
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  background: var(--subtle-faint);
+}
+
+.theme-icon-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+}
+
+.theme-icon-button:hover,
+.theme-icon-button.active {
+  color: var(--text);
+  background: var(--subtle);
+}
+
+.theme-icon-button.active {
+  box-shadow: var(--button-highlight);
+}
+
+.theme-icon-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.theme-hint {
+  width: 96px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: right;
+  transition: opacity 0.16s ease;
+}
+
+.theme-hint.hidden {
+  display: inline;
+  opacity: 0;
 }
 
 .count-pill {
@@ -953,6 +995,10 @@ mark {
   .app-footer {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .theme-inline {
+    justify-content: flex-start;
   }
 
   h1 {

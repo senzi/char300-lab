@@ -26,6 +26,7 @@ let detailMode: DetailMode = "writing";
 let selectedVersionId: string | null = getActiveEntry(state).current_version_id;
 let pendingImportFile: File | null = null;
 let historyEditUnlockedEntryId: string | null = null;
+let themeHintTimer: number | null = null;
 
 persistState(state);
 
@@ -48,14 +49,6 @@ app.innerHTML = `
       <h1 id="dateTitle" class="date-title"></h1>
       <div class="top-actions">
         <button class="button ghost" id="todayButton" type="button">回到今日</button>
-        <label class="theme-switcher">
-          <span>模式</span>
-          <select id="themeSelect" aria-label="夜间模式">
-            <option value="auto">自动</option>
-            <option value="light">日间</option>
-            <option value="dark">夜间</option>
-          </select>
-        </label>
         <div class="export-menu-wrap">
           <button class="button ghost" id="exportButton" type="button" aria-expanded="false">导出</button>
           <div class="export-menu hidden" id="exportMenu">
@@ -75,6 +68,37 @@ app.innerHTML = `
       <div class="segmented" role="tablist" aria-label="主视图">
         <button id="writeViewButton" type="button">写作</button>
         <button id="feedViewButton" type="button">阅读流</button>
+      </div>
+      <div class="theme-inline">
+        <span class="theme-hint hidden" id="themeHint" aria-live="polite"></span>
+        <div class="theme-icon-group" role="radiogroup" aria-label="外观模式">
+          <button class="theme-icon-button" type="button" role="radio" data-theme="auto" aria-label="跟随系统" title="跟随系统">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7A2.5 2.5 0 0 1 17.5 16h-11A2.5 2.5 0 0 1 4 13.5v-7Z" />
+              <path d="M9 20h6" />
+              <path d="M12 16v4" />
+              <path d="M8 8.5h8" />
+            </svg>
+          </button>
+          <button class="theme-icon-button" type="button" role="radio" data-theme="light" aria-label="日间" title="日间">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2.5v2" />
+              <path d="M12 19.5v2" />
+              <path d="m4.6 4.6 1.4 1.4" />
+              <path d="m18 18 1.4 1.4" />
+              <path d="M2.5 12h2" />
+              <path d="M19.5 12h2" />
+              <path d="m4.6 19.4 1.4-1.4" />
+              <path d="m18 6 1.4-1.4" />
+            </svg>
+          </button>
+          <button class="theme-icon-button" type="button" role="radio" data-theme="dark" aria-label="夜间" title="夜间">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 14.4A7.8 7.8 0 0 1 9.6 4a8.4 8.4 0 1 0 10.4 10.4Z" />
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -180,7 +204,8 @@ app.innerHTML = `
 
 const dateTitle = getElement<HTMLElement>("dateTitle");
 const todayButton = getElement<HTMLButtonElement>("todayButton");
-const themeSelect = getElement<HTMLSelectElement>("themeSelect");
+const themeHint = getElement<HTMLElement>("themeHint");
+const themeButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".theme-icon-button[data-theme]"));
 const saveButton = getElement<HTMLButtonElement>("saveButton");
 const exportButton = getElement<HTMLButtonElement>("exportButton");
 const exportMenu = getElement<HTMLElement>("exportMenu");
@@ -291,6 +316,15 @@ exportButton.addEventListener("click", () => {
   exportButton.setAttribute("aria-expanded", String(!isOpen));
 });
 
+themeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    themePreference = parseThemePreference(button.dataset.theme ?? null);
+    localStorage.setItem(themePreferenceKey, themePreference);
+    applyThemePreference();
+    showThemeHint(formatThemePreference(themePreference));
+  });
+});
+
 exportImageButton.addEventListener("click", () => {
   closeExportMenu();
   void exportDailyCard(getActiveEntry(state));
@@ -348,12 +382,6 @@ importConfirmButton.addEventListener("click", () => {
   if (pendingImportFile) {
     void importZipBackup(pendingImportFile);
   }
-});
-
-themeSelect.addEventListener("change", () => {
-  themePreference = parseThemePreference(themeSelect.value);
-  localStorage.setItem(themePreferenceKey, themePreference);
-  applyThemePreference();
 });
 
 colorSchemeQuery.addEventListener("change", () => {
@@ -448,12 +476,42 @@ function applyThemePreference(): void {
   const resolvedTheme = themePreference === "auto" ? (colorSchemeQuery.matches ? "dark" : "light") : themePreference;
   document.body.classList.toggle("theme-dark", resolvedTheme === "dark");
   document.documentElement.style.colorScheme = resolvedTheme;
-  themeSelect.value = themePreference;
+  themeButtons.forEach((button) => {
+    const isActive = button.dataset.theme === themePreference;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-checked", String(isActive));
+  });
 }
 
 function closeExportMenu(): void {
   exportMenu.classList.add("hidden");
   exportButton.setAttribute("aria-expanded", "false");
+}
+
+function formatThemePreference(value: ThemePreference): string {
+  if (value === "light") {
+    return "日间";
+  }
+
+  if (value === "dark") {
+    return "夜间";
+  }
+
+  return "自动";
+}
+
+function showThemeHint(label: string): void {
+  themeHint.textContent = `已切换为${label}`;
+  themeHint.classList.remove("hidden");
+
+  if (themeHintTimer !== null) {
+    window.clearTimeout(themeHintTimer);
+  }
+
+  themeHintTimer = window.setTimeout(() => {
+    themeHint.classList.add("hidden");
+    themeHintTimer = null;
+  }, 1200);
 }
 
 function showStorageNoticeIfNeeded(): void {
@@ -701,7 +759,10 @@ async function exportZipBackup(): Promise<void> {
     app: appName,
     schema_version: 2,
     exported_at: new Date().toISOString(),
-    state
+    state,
+    preferences: {
+      theme: themePreference
+    }
   };
 
   zip.file("zhuzi-data.json", JSON.stringify(payload, null, 2));
@@ -729,7 +790,7 @@ async function importZipBackup(file: File): Promise<void> {
     }
 
     const raw = await dataFile.async("string");
-    const parsed = JSON.parse(raw) as { state?: AppState };
+    const parsed = JSON.parse(raw) as { preferences?: { theme?: string }; state?: AppState };
     if (!parsed.state || !Array.isArray(parsed.state.entries) || typeof parsed.state.active_entry_id !== "string") {
       showImportStatus("备份数据格式不正确。", "error");
       importConfirmButton.disabled = false;
@@ -738,6 +799,11 @@ async function importZipBackup(file: File): Promise<void> {
 
     state = ensureTodayEntry(normalizeState(parsed.state));
     persistState(state);
+    if (parsed.preferences?.theme) {
+      themePreference = parseThemePreference(parsed.preferences.theme);
+      localStorage.setItem(themePreferenceKey, themePreference);
+      applyThemePreference();
+    }
     pendingImportFile = null;
     selectedVersionId = getActiveEntry(state).current_version_id;
     detailMode = "writing";
