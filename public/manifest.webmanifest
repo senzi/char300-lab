@@ -1,0 +1,18 @@
+{
+  "name": "逐字",
+  "short_name": "逐字",
+  "description": "让每一次修改都被看见。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f4ed",
+  "theme_color": "#f7f4ed",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

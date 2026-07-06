@@ -16,6 +16,15 @@ const writingYearGoalDays = 365;
 const writingMilestones = [3, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 120, 150, 180, 210, 240, 270, 300, 330, 365];
 const changelog: ChangelogEntry[] = [
   {
+    version: "0.2.2",
+    date: "2026-07-06",
+    title: "离线可用",
+    items: [
+      "新增 PWA 离线支持，首次在线打开后可在断网时继续写作。",
+      "缓存应用资源、字体样式和已加载字体分片，后续版本上线后会自动接管并刷新。"
+    ]
+  },
+  {
     version: "0.2.1",
     date: "2026-07-06",
     title: "文案与分享卡片优化",
@@ -569,6 +578,7 @@ unlockHistoryEditButton.addEventListener("click", () => {
 render();
 refreshStorageUpgradeEntry();
 refreshStorageHealthLight();
+registerServiceWorker();
 if (shouldShowOpfsUpgradePrompt()) {
   showStorageUpgradePrompt();
 } else if (shouldShowChangelogOnLaunch()) {
@@ -627,6 +637,41 @@ function render(): void {
   renderDailySummary(activeEntry);
   renderFeed();
   renderOverview();
+}
+
+function registerServiceWorker(): void {
+  if (!import.meta.env.PROD || !("serviceWorker" in navigator)) {
+    return;
+  }
+
+  window.addEventListener("load", () => {
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let refreshing = false;
+
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController || refreshing) {
+        return;
+      }
+
+      refreshing = true;
+      window.location.reload();
+    });
+
+    void navigator.serviceWorker.register("/sw.js").then((registration) => {
+      registration.addEventListener("updatefound", () => {
+        const worker = registration.installing;
+        if (!worker) {
+          return;
+        }
+
+        worker.addEventListener("statechange", () => {
+          if (worker.state === "installed" && hadController) {
+            registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+          }
+        });
+      });
+    });
+  });
 }
 
 async function hydrateActiveStorage(): Promise<void> {
