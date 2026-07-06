@@ -1,5 +1,6 @@
 import "./styles.css";
 import JSZip from "jszip";
+import logoDarkUrl from "./assets/logo-dark.svg";
 import logoUrl from "./assets/logo.svg";
 import { diffTexts, summarizeDiff } from "./diff";
 import { getTokenStats, tokenize } from "./tokenizer";
@@ -15,6 +16,15 @@ const themePreferenceKey = "zhuzi-theme-preference-v1";
 const writingYearGoalDays = 365;
 const writingMilestones = [3, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 120, 150, 180, 210, 240, 270, 300, 330, 365];
 const changelog: ChangelogEntry[] = [
+  {
+    version: "0.2.3",
+    date: "2026-07-06",
+    title: "体验细节优化",
+    items: [
+      "优化夜间模式下的标识与分享图片表现。",
+      "调整总览分享图版式与留白。"
+    ]
+  },
   {
     version: "0.2.2",
     date: "2026-07-06",
@@ -57,6 +67,24 @@ const changelog: ChangelogEntry[] = [
 type View = "write" | "feed" | "overview";
 type DetailMode = "writing" | "version";
 type ThemePreference = "auto" | "light" | "dark";
+type ResolvedTheme = "light" | "dark";
+type SharePalette = {
+  bg: string;
+  cardBg: string;
+  text: string;
+  textSoft: string;
+  muted: string;
+  border: string;
+  shadow: string;
+  pillBg: string;
+  success: string;
+  danger: string;
+  gridAbsent: string;
+  gridFuture: string;
+  gridLevels: [string, string, string, string];
+  track: string;
+  trackMuted: string;
+};
 type StorageDialogMode = "notice" | "upgrade";
 type ChangelogEntry = {
   version: string;
@@ -100,7 +128,7 @@ app.innerHTML = `
   <main class="shell">
     <header class="topbar">
       <div class="brand">
-        <img class="app-mark" src="${logoUrl}" alt="" aria-hidden="true" />
+        <img class="app-mark" id="appMark" src="${logoUrl}" alt="" aria-hidden="true" />
         <div>
           <p class="brand-name">${appName}</p>
           <p class="brand-slogan">${appSlogan}</p>
@@ -305,6 +333,7 @@ app.innerHTML = `
 `;
 
 const dateTitle = getElement<HTMLElement>("dateTitle");
+const appMark = getElement<HTMLImageElement>("appMark");
 const todayButton = getElement<HTMLButtonElement>("todayButton");
 const themeHint = getElement<HTMLElement>("themeHint");
 const themeButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".theme-icon-button[data-theme]"));
@@ -702,14 +731,19 @@ function parseThemePreference(value: string | null): ThemePreference {
 }
 
 function applyThemePreference(): void {
-  const resolvedTheme = themePreference === "auto" ? (colorSchemeQuery.matches ? "dark" : "light") : themePreference;
+  const resolvedTheme = getResolvedTheme();
   document.body.classList.toggle("theme-dark", resolvedTheme === "dark");
   document.documentElement.style.colorScheme = resolvedTheme;
+  appMark.src = resolvedTheme === "dark" ? logoDarkUrl : logoUrl;
   themeButtons.forEach((button) => {
     const isActive = button.dataset.theme === themePreference;
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-checked", String(isActive));
   });
+}
+
+function getResolvedTheme(): ResolvedTheme {
+  return themePreference === "auto" ? (colorSchemeQuery.matches ? "dark" : "light") : themePreference;
 }
 
 function closeExportMenu(): void {
@@ -1133,6 +1167,7 @@ function renderOverviewBarTrack(
 
 async function exportOverviewCard(): Promise<void> {
   await document.fonts.ready;
+  const palette = getSharePalette();
   const days = getOverviewDays();
   const writtenDays = days.filter((day) => day.state === "written");
   const elapsedDays = days.filter((day) => day.state !== "future");
@@ -1157,32 +1192,49 @@ async function exportOverviewCard(): Promise<void> {
     return;
   }
 
-  const pillY = 870;
+  const contentX = 96;
+  const cardX = 48;
+  const cardY = 48;
+  const cardW = width - cardX * 2;
+  const cardRadius = 18;
+  const pillY = 892;
   const pillHeight = 48;
-  const gapAfterPill = 58;
+  const gapAfterPill = 48;
   const sloganLine1 = `${appName}，${appSlogan}`;
   const sloganLine2 = appUrl;
   ctx.font = cardFont(24);
   const slogan1Width = ctx.measureText(sloganLine1).width;
   const slogan2Width = ctx.measureText(sloganLine2).width;
-  const sloganLineHeight = 40;
+  const sloganLineHeight = 36;
   const sloganStartY = pillY + pillHeight + gapAfterPill;
-  const bottomPadding = 56;
+  const bottomPadding = 52;
   const height = sloganStartY + sloganLineHeight * 2 + bottomPadding;
 
   canvas.width = width * scale;
   canvas.height = height * scale;
 
   ctx.scale(scale, scale);
-  ctx.fillStyle = "#f7f4ed";
+  ctx.fillStyle = palette.bg;
   ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = "#1c1c1c";
+  ctx.save();
+  ctx.shadowColor = palette.shadow;
+  ctx.shadowBlur = 34;
+  ctx.shadowOffsetY = 18;
+  roundRect(ctx, cardX, cardY, cardW, height - cardY * 2, cardRadius);
+  ctx.fillStyle = palette.cardBg;
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = palette.border;
+  ctx.lineWidth = 2;
+  roundRect(ctx, cardX, cardY, cardW, height - cardY * 2, cardRadius);
+  ctx.stroke();
+  ctx.fillStyle = palette.text;
   ctx.font = cardFont(38);
-  ctx.fillText("逐字总览", 72, 88);
-  ctx.fillStyle = "rgba(28,28,28,0.56)";
+  ctx.fillText("逐字·数据总览", contentX, 104);
+  ctx.fillStyle = palette.muted;
   ctx.font = cardFont(24);
-  ctx.fillText(`${days[0]?.key ?? todayKey()} 至 ${days.at(-1)?.key ?? todayKey()}`, 72, 126);
-  ctx.fillStyle = "rgba(28,28,28,0.56)";
+  ctx.fillText(`${days[0]?.key ?? todayKey()} 至 ${days.at(-1)?.key ?? todayKey()}`, contentX, 142);
+  ctx.fillStyle = palette.muted;
   ctx.font = cardFont(24);
   ctx.fillText(sloganLine1, (width - slogan1Width) / 2, sloganStartY);
   ctx.fillText(sloganLine2, (width - slogan2Width) / 2, sloganStartY + sloganLineHeight);
@@ -1196,48 +1248,48 @@ async function exportOverviewCard(): Promise<void> {
     ["日均总字数", String(averageDailyWords)],
     ["篇均终稿字数", String(averageArticleWords)],
     ["日均版本", averageVersions]
-  ]);
+  ], palette);
 
-  ctx.fillStyle = "#1c1c1c";
+  ctx.fillStyle = palette.text;
   ctx.font = cardFont(26);
-  ctx.fillText("年度格", 72, 384);
-  ctx.fillStyle = "rgba(28,28,28,0.56)";
+  ctx.fillText("年度格", contentX, 410);
+  ctx.fillStyle = palette.muted;
   ctx.font = cardFont(20);
-  ctx.fillText(`${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 +${insertedTotal} -${deletedTotal}`, 176, 384);
-  drawOverviewCardGrid(ctx, days, intensityMax, 72, 410);
+  ctx.fillText(`${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 +${insertedTotal} -${deletedTotal}`, contentX + 104, 410);
+  drawOverviewCardGrid(ctx, days, intensityMax, contentX, 438, palette);
 
-  ctx.fillStyle = "#1c1c1c";
+  ctx.fillStyle = palette.text;
   ctx.font = cardFont(26);
-  ctx.fillText("每日数据", 72, 606);
-  ctx.fillStyle = "rgba(28,28,28,0.56)";
+  ctx.fillText("每日数据", contentX, 636);
+  ctx.fillStyle = palette.muted;
   ctx.font = cardFont(20);
-  ctx.fillText("按已推进日期展示，不含正文", 194, 606);
-  drawOverviewCardTrack(ctx, "日总字数", elapsedDays, wordMax, (day) => day.wordCount, 72, 650);
-  drawOverviewCardTrack(ctx, "日版本", elapsedDays, versionMax, (day) => day.versions, 72, 732);
-  drawOverviewCardTrack(ctx, "日修改量", elapsedDays, intensityMax, (day) => day.churn, 72, 814);
+  ctx.fillText("按已推进日期展示，不含正文", contentX + 122, 636);
+  drawOverviewCardTrack(ctx, "日总字数", elapsedDays, wordMax, (day) => day.wordCount, contentX, 680, palette);
+  drawOverviewCardTrack(ctx, "日版本", elapsedDays, versionMax, (day) => day.versions, contentX, 762, palette);
+  drawOverviewCardTrack(ctx, "日修改量", elapsedDays, intensityMax, (day) => day.churn, contentX, 844, palette);
 
   const pillLabelY = pillY + 31;
-  drawSoftPill(ctx, 72, pillY, 520, pillHeight);
-  ctx.fillStyle = "#1c1c1c";
+  drawSoftPill(ctx, contentX, pillY, 520, pillHeight, palette);
+  ctx.fillStyle = palette.text;
   ctx.font = cardFont(22);
-  ctx.fillText("修改量最高", 96, pillLabelY);
+  ctx.fillText("修改量最高", contentX + 24, pillLabelY);
 
   if (bestChurnDay) {
     const dateStr = `${formatShortDate(bestChurnDay.key)} · `;
     const insertedStr = `+${bestChurnDay.inserted}`;
     const deletedStr = ` -${bestChurnDay.deleted}`;
-    let x = 228;
-    ctx.fillStyle = "rgba(28,28,28,0.62)";
+    let x = contentX + 156;
+    ctx.fillStyle = palette.textSoft;
     ctx.fillText(dateStr, x, pillLabelY);
     x += ctx.measureText(dateStr).width;
-    ctx.fillStyle = "#287a46";
+    ctx.fillStyle = palette.success;
     ctx.fillText(insertedStr, x, pillLabelY);
     x += ctx.measureText(insertedStr).width;
-    ctx.fillStyle = "#9b3428";
+    ctx.fillStyle = palette.danger;
     ctx.fillText(deletedStr, x, pillLabelY);
   } else {
-    ctx.fillStyle = "rgba(28,28,28,0.62)";
-    ctx.fillText("保存版本后显示当日修改量", 228, pillLabelY);
+    ctx.fillStyle = palette.textSoft;
+    ctx.fillText("保存版本后显示当日修改量", contentX + 156, pillLabelY);
   }
 
   const link = document.createElement("a");
@@ -1680,11 +1732,12 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
 
   await document.fonts.ready;
   const summary = summarizeDiff(first.content, last.content);
+  const palette = getSharePalette();
   const canvas = document.createElement("canvas");
   const scale = 2;
   const cardWidth = 1040;
-  const cardX = 64;
-  const cardY = 56;
+  const cardX = 48;
+  const cardY = 48;
   const cardInnerX = 112;
   const cardW = cardWidth - cardX * 2;
   const contentStartY = 230;
@@ -1716,9 +1769,9 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   const footerLine1 = `${appName}，${appSlogan}`;
   const footerLine2 = appUrl;
   const footerLineHeight = 38;
-  const footerStartY = signatureY + 62;
-  const cardH = Math.max(660, footerStartY + footerLineHeight * 2 + 44 - cardY);
-  const cardHeight = cardY + cardH + 56;
+  const footerStartY = signatureY + 50;
+  const cardH = Math.max(660, footerStartY + footerLineHeight * 2 + 32 - cardY);
+  const cardHeight = cardY + cardH + 48;
   canvas.width = cardWidth * scale;
   canvas.height = cardHeight * scale;
   const ctx = canvas.getContext("2d");
@@ -1727,44 +1780,44 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   }
 
   ctx.scale(scale, scale);
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = palette.bg;
   ctx.fillRect(0, 0, cardWidth, cardHeight);
   ctx.save();
-  ctx.shadowColor = "rgba(28,28,28,0.12)";
+  ctx.shadowColor = palette.shadow;
   ctx.shadowBlur = 34;
   ctx.shadowOffsetY = 18;
   roundRect(ctx, cardX, cardY, cardW, cardH, 30);
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = palette.cardBg;
   ctx.fill();
   ctx.restore();
-  ctx.strokeStyle = "rgba(28,28,28,0.08)";
+  ctx.strokeStyle = palette.border;
   ctx.lineWidth = 2;
   roundRect(ctx, cardX, cardY, cardW, cardH, 30);
   ctx.stroke();
 
-  ctx.fillStyle = "#1c1c1c";
+  ctx.fillStyle = palette.text;
   ctx.font = cardFont(34);
   ctx.fillText(`${formatDisplayDate(entry.date_key)} · ${getPracticeLabel(entry, getEntriesForDate(entry.date_key))}`, cardInnerX, 134);
   ctx.font = cardFont(28);
   const meterPaddingX = 24;
   const meterWidth = Math.ceil(ctx.measureText(meterText).width + meterPaddingX * 2);
   const meterX = cardX + cardW - 48 - meterWidth;
-  drawSoftPill(ctx, meterX, 100, meterWidth, 44);
-  ctx.fillStyle = "rgba(28,28,28,0.72)";
+  drawSoftPill(ctx, meterX, 100, meterWidth, 44, palette);
+  ctx.fillStyle = palette.textSoft;
   ctx.fillText(meterText, meterX + meterPaddingX, 130);
 
-  ctx.fillStyle = "#1c1c1c";
+  ctx.fillStyle = palette.text;
   ctx.font = cardFont(30);
   visibleLines.forEach((line, index) => {
     ctx.fillText(line, cardInnerX, contentStartY + index * lineHeight);
   });
 
-  chipLayout.chips.forEach((chip) => drawCardChip(ctx, chip));
+  chipLayout.chips.forEach((chip) => drawCardChip(ctx, chip, palette));
 
-  ctx.fillStyle = "#1c1c1c";
+  ctx.fillStyle = palette.text;
   ctx.font = cardFont(26);
   ctx.fillText(achievementText, cardInnerX, signatureY);
-  ctx.fillStyle = "rgba(28,28,28,0.52)";
+  ctx.fillStyle = palette.muted;
   ctx.font = cardFont(24);
   const footerLine1Width = ctx.measureText(footerLine1).width;
   const footerLine2Width = ctx.measureText(footerLine2).width;
@@ -1788,11 +1841,51 @@ function renderShareAchievementText(): string {
   return `累计${stats.writtenDays}天写作，${articleCount}篇文字，${versionTotal}个版本`;
 }
 
-function drawSoftPill(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
+function getSharePalette(): SharePalette {
+  if (getResolvedTheme() === "dark") {
+    return {
+      bg: "#ffffff",
+      cardBg: "#1d1b1a",
+      text: "#ebe6dd",
+      textSoft: "rgba(235,230,221,0.78)",
+      muted: "rgba(235,230,221,0.58)",
+      border: "rgba(235,230,221,0.14)",
+      shadow: "rgba(0,0,0,0.38)",
+      pillBg: "rgba(255,255,255,0.055)",
+      success: "#7fd39a",
+      danger: "#ff8b7c",
+      gridAbsent: "rgba(255,255,255,0.07)",
+      gridFuture: "rgba(255,255,255,0.035)",
+      gridLevels: ["rgba(127,211,154,0.24)", "rgba(127,211,154,0.42)", "rgba(127,211,154,0.62)", "#7fd39a"],
+      track: "rgba(235,230,221,0.72)",
+      trackMuted: "rgba(235,230,221,0.2)"
+    };
+  }
+
+  return {
+    bg: "#ffffff",
+    cardBg: "#ffffff",
+    text: "#1c1c1c",
+    textSoft: "rgba(28,28,28,0.72)",
+    muted: "rgba(28,28,28,0.56)",
+    border: "rgba(28,28,28,0.08)",
+    shadow: "rgba(28,28,28,0.12)",
+    pillBg: "rgba(28,28,28,0.035)",
+    success: "#287a46",
+    danger: "#9b3428",
+    gridAbsent: "rgba(28,28,28,0.08)",
+    gridFuture: "rgba(28,28,28,0.035)",
+    gridLevels: ["rgba(40,122,70,0.22)", "rgba(40,122,70,0.38)", "rgba(40,122,70,0.58)", "#287a46"],
+    track: "rgba(28,28,28,0.72)",
+    trackMuted: "rgba(28,28,28,0.18)"
+  };
+}
+
+function drawSoftPill(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, palette = getSharePalette()): void {
   roundRect(ctx, x, y, width, height, 18);
-  ctx.fillStyle = "rgba(28,28,28,0.035)";
+  ctx.fillStyle = palette.pillBg;
   ctx.fill();
-  ctx.strokeStyle = "#eceae4";
+  ctx.strokeStyle = palette.border;
   ctx.stroke();
 }
 
@@ -1845,29 +1938,29 @@ function layoutCardChips(
   };
 }
 
-function drawCardChip(ctx: CanvasRenderingContext2D, chip: PositionedCardChip): void {
-  drawSoftPill(ctx, chip.x, chip.y, chip.width, 54);
+function drawCardChip(ctx: CanvasRenderingContext2D, chip: PositionedCardChip, palette = getSharePalette()): void {
+  drawSoftPill(ctx, chip.x, chip.y, chip.width, 54, palette);
   ctx.font = cardFont(24);
-  ctx.fillStyle = "#5f5f5d";
+  ctx.fillStyle = palette.muted;
   ctx.fillText(chip.label, chip.x + 20, chip.y + 35);
   const valueX = chip.x + 20 + ctx.measureText(chip.label).width + 18;
   ctx.font = cardFont(28);
   if (chip.kind === "plain") {
-    ctx.fillStyle = "#1c1c1c";
+    ctx.fillStyle = palette.text;
     ctx.fillText(chip.value, valueX, chip.y + 36);
     return;
   }
 
   const insertedText = `+${chip.inserted}`;
-  ctx.fillStyle = "#287a46";
+  ctx.fillStyle = palette.success;
   ctx.fillText(insertedText, valueX, chip.y + 36);
-  ctx.fillStyle = "#9b3428";
+  ctx.fillStyle = palette.danger;
   ctx.fillText(`-${chip.deleted}`, valueX + ctx.measureText(insertedText).width + 16, chip.y + 36);
 }
 
-function drawOverviewCardStats(ctx: CanvasRenderingContext2D, stats: Array<[string, string]>): void {
-  const startX = 72;
-  const startY = 164;
+function drawOverviewCardStats(ctx: CanvasRenderingContext2D, stats: Array<[string, string]>, palette = getSharePalette()): void {
+  const startX = 96;
+  const startY = 184;
   const gap = 16;
   const itemW = 260;
   const itemH = 84;
@@ -1875,23 +1968,23 @@ function drawOverviewCardStats(ctx: CanvasRenderingContext2D, stats: Array<[stri
   stats.forEach(([label, value], index) => {
     const x = startX + (index % 4) * (itemW + gap);
     const y = startY + Math.floor(index / 4) * (itemH + gap);
-    drawSoftPill(ctx, x, y, itemW, itemH);
-    ctx.fillStyle = "#1c1c1c";
+    drawSoftPill(ctx, x, y, itemW, itemH, palette);
+    ctx.fillStyle = palette.text;
     ctx.font = cardFont(28);
     ctx.fillText(value, x + 18, y + 36);
-    ctx.fillStyle = "rgba(28,28,28,0.56)";
+    ctx.fillStyle = palette.muted;
     ctx.font = cardFont(19);
     ctx.fillText(label, x + 18, y + 64);
   });
 }
 
-function drawOverviewCardGrid(ctx: CanvasRenderingContext2D, days: OverviewDay[], maxChurn: number, x: number, y: number): void {
+function drawOverviewCardGrid(ctx: CanvasRenderingContext2D, days: OverviewDay[], maxChurn: number, x: number, y: number, palette = getSharePalette()): void {
   const cell = 12;
   const gap = 4;
   days.forEach((day, index) => {
     const column = Math.floor(index / 7);
     const row = index % 7;
-    ctx.fillStyle = overviewCellColor(day, getOverviewLevel(day, maxChurn));
+    ctx.fillStyle = overviewCellColor(day, getOverviewLevel(day, maxChurn), palette);
     roundRect(ctx, x + column * (cell + gap), y + row * (cell + gap), cell, cell, 3);
     ctx.fill();
   });
@@ -1904,17 +1997,18 @@ function drawOverviewCardTrack(
   maxValue: number,
   getValue: (day: OverviewDay) => number,
   x: number,
-  y: number
+  y: number,
+  palette = getSharePalette()
 ): void {
   const labelW = 118;
   const trackW = 1040;
   const barGap = 2;
   const count = Math.max(days.length, 1);
   const barW = Math.max(5, Math.min(14, (trackW - (count - 1) * barGap) / count));
-  ctx.fillStyle = "rgba(28,28,28,0.56)";
+  ctx.fillStyle = palette.muted;
   ctx.font = cardFont(20);
   ctx.fillText(label, x, y + 38);
-  ctx.strokeStyle = "rgba(28,28,28,0.12)";
+  ctx.strokeStyle = palette.border;
   ctx.beginPath();
   ctx.moveTo(x + labelW, y + 48);
   ctx.lineTo(x + labelW + trackW, y + 48);
@@ -1923,22 +2017,22 @@ function drawOverviewCardTrack(
   days.forEach((day, index) => {
     const value = getValue(day);
     const barH = day.state === "future" || value === 0 ? 3 : Math.max(6, Math.round((value / maxValue) * 42));
-    ctx.fillStyle = day.state === "written" ? "rgba(28,28,28,0.72)" : "rgba(28,28,28,0.18)";
+    ctx.fillStyle = day.state === "written" ? palette.track : palette.trackMuted;
     roundRect(ctx, x + labelW + index * (barW + barGap), y + 48 - barH, barW, barH, 2);
     ctx.fill();
   });
 }
 
-function overviewCellColor(day: OverviewDay, level: number): string {
+function overviewCellColor(day: OverviewDay, level: number, palette = getSharePalette()): string {
   if (day.state === "future") {
-    return "rgba(28,28,28,0.035)";
+    return palette.gridFuture;
   }
 
   if (day.state === "absent") {
-    return "rgba(28,28,28,0.08)";
+    return palette.gridAbsent;
   }
 
-  return ["rgba(40,122,70,0.22)", "rgba(40,122,70,0.38)", "rgba(40,122,70,0.58)", "#287a46"][level - 1] ?? "#287a46";
+  return palette.gridLevels[level - 1] ?? palette.success;
 }
 
 function wrapTextPreservingBreaks(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {

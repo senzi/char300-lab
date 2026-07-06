@@ -87,6 +87,9 @@ export function loadState(): AppState {
   if (!legacyRaw) {
     opfsWriteEnabled = isOpfsSupported();
     opfsStorageHealthy = opfsWriteEnabled;
+    if (opfsWriteEnabled) {
+      localStorage.setItem(opfsUpgradeKey, "upgraded" satisfies OpfsUpgradeState);
+    }
     return createEmptyState();
   }
 
