@@ -3,7 +3,7 @@ import JSZip from "jszip";
 import logoDarkUrl from "./assets/logo-dark.svg";
 import logoUrl from "./assets/logo.svg";
 import { diffTexts, summarizeDiff } from "./diff";
-import { getTokenStats, tokenize } from "./tokenizer";
+import { getTokenStats } from "./tokenizer";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
 import { canOfferOpfsUpgrade, createTodayPractice, deleteEntry, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistState, saveVersion, shouldShowOpfsUpgradePrompt, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
 
@@ -2272,11 +2272,11 @@ function wrapTextPreservingBreaks(ctx: CanvasRenderingContext2D, text: string, w
     }
 
     let current = "";
-    for (const token of tokenize(paragraph)) {
-      const next = current + token.value;
+    for (const segment of segmentTextForWrapping(paragraph)) {
+      const next = current + segment;
       if (ctx.measureText(next).width > width && current) {
         lines.push(current);
-        current = token.value;
+        current = segment;
       } else {
         current = next;
       }
@@ -2288,6 +2288,10 @@ function wrapTextPreservingBreaks(ctx: CanvasRenderingContext2D, text: string, w
   }
 
   return lines;
+}
+
+function segmentTextForWrapping(text: string): string[] {
+  return text.match(/\s+|[A-Za-z]+|\d+|./gu) ?? [];
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number): void {
