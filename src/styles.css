@@ -210,6 +210,31 @@ h3 {
   text-align: left;
 }
 
+.export-menu-row {
+  display: grid;
+  grid-template-columns: 1fr 34px;
+  align-items: center;
+  gap: 4px;
+}
+
+.export-menu .icon-help-button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+}
+
+.icon-help-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .export-menu button:hover:not(:disabled),
 .export-menu button:focus-visible {
   outline: 0;
@@ -343,6 +368,34 @@ h3 {
 }
 
 .changelog-list::-webkit-scrollbar {
+  display: none;
+}
+
+.json-schema-dialog {
+  width: min(720px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+}
+
+.json-schema-content {
+  max-height: min(520px, calc(100vh - 250px));
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  overflow-y: auto;
+  color: var(--text-soft);
+  background: var(--subtle-chip);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  scrollbar-width: none;
+}
+
+.json-schema-content::-webkit-scrollbar {
   display: none;
 }
 

@@ -19,13 +19,14 @@
   - 当日 Markdown
   - 全部 Markdown
   - 完整数据 ZIP
-  - 从 ZIP 导入恢复
+  - JSON 导出
+  - 从 ZIP/JSON 导入恢复
 - 离线可用：首次在线打开后，可在断网时继续写作和读取本地数据。
 - 更新日志：页脚可随时查看用户层面的更新说明。
 
 ## 当前版本
 
-0.2.3 主要是体验细节优化：夜间模式标识、分享图片表现，以及总览分享图的版式与留白。
+0.2.4 新增 JSON 导出、JSON 架构说明与 ZIP/JSON 兼容导入；旧版 ZIP 备份仍可继续恢复。
 
 ## 使用方式
 
@@ -114,7 +115,7 @@ npm run preview
 再在另一个环境中使用：
 
 ```text
-导出 → 从 ZIP 导入
+导出 → 从 ZIP/JSON 导入
 ```
 
 ## 备份建议
@@ -123,6 +124,12 @@ npm run preview
 
 ```text
 导出 → 完整数据 ZIP
+```
+
+如果只需要可恢复、可处理的结构化数据，也可以使用：
+
+```text
+导出 → JSON 导出
 ```
 
 建议频率：
@@ -138,10 +145,19 @@ npm run preview
 - `markdown/all.md`：全部终稿的 Markdown 汇总。
 - `markdown/days/*.md`：每天单独一份 Markdown。
 
+JSON 导出得到的就是 ZIP 内 `zhuzi-data.json` 的同一份数据。
+
+Agent 或脚本可以在已打开逐字页面的浏览器上下文中读取同一份 JSON。这个接口只读，不是 HTTP API：
+
+```js
+const payload = await page.evaluate(() => window.zhuzi.getBackupPayload());
+const json = await page.evaluate(() => window.zhuzi.exportJson());
+```
+
 恢复方式：
 
 ```text
-导出 → 从 ZIP 导入
+导出 → 从 ZIP/JSON 导入
 ```
 
 导入会替换当前环境里的本地档案，所以导入前请确认当前环境里没有未备份的重要内容。

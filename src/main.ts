@@ -17,6 +17,15 @@ const writingYearGoalDays = 365;
 const writingMilestones = [3, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 120, 150, 180, 210, 240, 270, 300, 330, 365];
 const changelog: ChangelogEntry[] = [
   {
+    version: "0.2.4",
+    date: "2026-07-07",
+    title: "JSON 备份",
+    items: [
+      "新增 JSON 导出，并提供说明与复制功能。",
+      "支持 ZIP/JSON 导入，旧备份继续兼容。"
+    ]
+  },
+  {
     version: "0.2.3",
     date: "2026-07-06",
     title: "体验细节优化",
@@ -64,6 +73,91 @@ const changelog: ChangelogEntry[] = [
   }
 ];
 
+const jsonSchemaDescription = `逐字 JSON 备份说明
+
+用途
+- 这是“完整数据 ZIP”内 zhuzi-data.json 的同一份数据，也可以单独导出为 JSON。
+- 可用于恢复逐字本地档案，也方便导入其他工具展示、统计或编写数据处理脚本。
+- 兼容性优先：字段含义保持稳定；新增字段时，旧导入逻辑应继续忽略不认识的字段。
+
+顶层结构
+{
+  "app": "逐字",
+  "schema_version": 2,
+  "exported_at": "2026-07-07T00:00:00.000Z",
+  "state": {
+    "entries": [],
+    "active_entry_id": ""
+  },
+  "preferences": {
+    "theme": "auto"
+  }
+}
+
+顶层字段
+- app: 导出应用名。当前为“逐字”，用于识别数据来源。
+- schema_version: 备份格式版本。当前为 2。
+- exported_at: 导出时间，ISO 8601 字符串。
+- state: 可导入恢复的完整写作档案。
+- preferences: 用户偏好。目前只包含主题设置。
+
+state 字段
+- state.entries: DailyEntry 数组。每一项是一篇每日练习或同日新增练习。
+- state.active_entry_id: 当前选中的 entry_id。导入后会尽量恢复当前位置。
+
+DailyEntry 字段
+- entry_id: 练习唯一 ID。
+- date_key: 练习日期，格式通常为 YYYY-MM-DD。
+- created_at: 创建时间，ISO 8601 字符串。
+- updated_at: 更新时间，ISO 8601 字符串。
+- current_version_id: 当前选中的版本 ID；没有保存版本时为 null。
+- optional_title: 显示标题。默认通常等于 date_key。
+- versions: Version 数组，保存每次点击“保存版本”后的完整文本快照。
+- draft: 当前草稿文本，可能尚未保存为版本。
+- lastSavedContent: 最近一次保存版本时的文本。
+
+Version 字段
+- version_id: 版本唯一 ID。
+- entry_id: 所属练习 ID。
+- content: 该版本的完整正文。
+- created_at: 版本创建时间，ISO 8601 字符串。
+- token_stats: 当前版本的字数/单位统计。
+- diff_from_previous: 与上一个版本相比的 token 级差异。
+- is_initial: 是否为该练习的第一个保存版本。
+
+token_stats 字段
+- text_units: 文本单位数，不含标点。
+- punctuation_units: 标点单位数。
+- total_units: 总单位数，包含文本与标点。
+- han_units: 汉字单位数。
+- latin_units: 拉丁字母 token 数。
+- number_units: 数字 token 数。
+
+diff_from_previous 字段
+- op: KEEP、INSERT 或 DELETE。
+- token.value: token 原文。
+- token.kind: han、latin、number 或 punctuation。
+
+preferences.theme
+- auto: 跟随系统。
+- light: 日间。
+- dark: 夜间。
+
+自动化获取
+- 逐字提供页面内只读 API，不是 HTTP API。
+- 需要先打开逐字页面（__ZHUZI_ORIGIN__），再由 Playwright、浏览器 Agent 或脚本在页面上下文中调用。
+- getBackupPayload() 返回 JSON 快照对象；exportJson() 返回格式化后的 JSON 字符串。
+
+示例
+const payload = await page.evaluate(() => window.zhuzi.getBackupPayload());
+const json = await page.evaluate(() => window.zhuzi.exportJson());
+const description = await page.evaluate(() => window.zhuzi.getSchemaDescription());
+
+导入兼容
+- 逐字可以导入完整备份对象，也可以导入裸 AppState，即只包含 entries 和 active_entry_id 的对象。
+- 旧版 char300-lab-data.json 仍通过 ZIP 导入兼容。
+`;
+
 type View = "write" | "feed" | "overview";
 type DetailMode = "writing" | "version";
 type ThemePreference = "auto" | "light" | "dark";
@@ -86,6 +180,21 @@ type SharePalette = {
   trackMuted: string;
 };
 type StorageDialogMode = "notice" | "upgrade";
+type BackupPayload = {
+  app: string;
+  schema_version: 2;
+  exported_at: string;
+  state: AppState;
+  preferences: {
+    theme: ThemePreference;
+  };
+};
+type ZhuziAutomationApi = {
+  version: string;
+  getBackupPayload: () => BackupPayload;
+  exportJson: () => string;
+  getSchemaDescription: () => string;
+};
 type ChangelogEntry = {
   version: string;
   date: string;
@@ -107,6 +216,12 @@ type CardChip =
   | { kind: "diff"; label: string; inserted: number; deleted: number; width: number }
   | { kind: "plain"; label: string; value: string; width: number };
 type PositionedCardChip = CardChip & { x: number; y: number };
+
+declare global {
+  interface Window {
+    zhuzi?: ZhuziAutomationApi;
+  }
+}
 
 let state: AppState = ensureTodayEntry(loadState());
 let view: View = "write";
@@ -145,13 +260,23 @@ app.innerHTML = `
             <button id="exportDayMarkdownButton" type="button">当日 Markdown</button>
             <button id="exportAllMarkdownButton" type="button">全部 Markdown</button>
             <button id="exportZipButton" type="button">完整数据 ZIP</button>
-            <button id="importZipButton" type="button">从 ZIP 导入</button>
+            <div class="export-menu-row">
+              <button id="exportJsonButton" type="button">JSON 导出</button>
+              <button class="icon-help-button" id="jsonSchemaButton" type="button" aria-label="查看 JSON 架构说明" title="查看 JSON 架构说明">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M9.5 9a2.7 2.7 0 0 1 5.1 1.2c0 1.8-2.6 2.1-2.6 4" />
+                  <path d="M12 17.5h.01" />
+                </svg>
+              </button>
+            </div>
+            <button id="importZipButton" type="button">从 ZIP/JSON 导入</button>
             <button class="export-menu-upgrade hidden" id="storageUpgradeMenuButton" type="button">升级本地存储</button>
           </div>
         </div>
         <button class="button primary" id="saveButton" type="button">保存版本</button>
       </div>
-      <input class="hidden" id="importZipInput" type="file" accept=".zip,application/zip" />
+      <input class="hidden" id="importZipInput" type="file" accept=".zip,.json,application/zip,application/json" />
     </header>
 
     <div class="modebar">
@@ -293,8 +418,8 @@ app.innerHTML = `
   <div class="notice-backdrop hidden" id="importConfirm" role="dialog" aria-modal="true" aria-labelledby="importConfirmTitle">
     <section class="notice-dialog">
       <p class="panel-kicker">Import</p>
-      <h2 id="importConfirmTitle">导入 ZIP 会替换当前本地档案</h2>
-      <p id="importConfirmText">导入会用备份内容覆盖当前环境中的每日记录。继续前，请确认当前内容已经导出备份。</p>
+      <h2 id="importConfirmTitle">导入备份会替换当前本地档案</h2>
+      <p id="importConfirmText">导入会用 ZIP 或 JSON 备份内容覆盖当前环境中的每日记录。继续前，请确认当前内容已经导出备份。</p>
       <p class="inline-status hidden" id="importStatus"></p>
       <div class="notice-actions">
         <button class="button ghost" id="importCancelButton" type="button">取消</button>
@@ -329,6 +454,18 @@ app.innerHTML = `
       </div>
     </section>
   </div>
+  <div class="notice-backdrop hidden" id="jsonSchemaDialog" role="dialog" aria-modal="true" aria-labelledby="jsonSchemaTitle">
+    <section class="notice-dialog json-schema-dialog">
+      <p class="panel-kicker">JSON</p>
+      <h2 id="jsonSchemaTitle">JSON 架构说明</h2>
+      <pre class="json-schema-content" id="jsonSchemaContent"></pre>
+      <p class="inline-status hidden" id="jsonSchemaStatus"></p>
+      <div class="notice-actions">
+        <button class="button ghost" id="jsonSchemaCopyButton" type="button">复制全文</button>
+        <button class="button primary" id="jsonSchemaCloseButton" type="button">关闭</button>
+      </div>
+    </section>
+  </div>
   <button class="storage-health-light storage-health-light-red" id="storageHealthLight" type="button" aria-label="OPFS 未启用" title="OPFS 未启用"></button>
 `;
 
@@ -344,6 +481,8 @@ const exportImageButton = getElement<HTMLButtonElement>("exportImageButton");
 const exportDayMarkdownButton = getElement<HTMLButtonElement>("exportDayMarkdownButton");
 const exportAllMarkdownButton = getElement<HTMLButtonElement>("exportAllMarkdownButton");
 const exportZipButton = getElement<HTMLButtonElement>("exportZipButton");
+const exportJsonButton = getElement<HTMLButtonElement>("exportJsonButton");
+const jsonSchemaButton = getElement<HTMLButtonElement>("jsonSchemaButton");
 const importZipButton = getElement<HTMLButtonElement>("importZipButton");
 const importZipInput = getElement<HTMLInputElement>("importZipInput");
 const storageUpgradeMenuButton = getElement<HTMLButtonElement>("storageUpgradeMenuButton");
@@ -380,6 +519,11 @@ const changelogButton = getElement<HTMLButtonElement>("changelogButton");
 const changelogDialog = getElement<HTMLElement>("changelogDialog");
 const changelogList = getElement<HTMLElement>("changelogList");
 const changelogCloseButton = getElement<HTMLButtonElement>("changelogCloseButton");
+const jsonSchemaDialog = getElement<HTMLElement>("jsonSchemaDialog");
+const jsonSchemaContent = getElement<HTMLElement>("jsonSchemaContent");
+const jsonSchemaStatus = getElement<HTMLElement>("jsonSchemaStatus");
+const jsonSchemaCopyButton = getElement<HTMLButtonElement>("jsonSchemaCopyButton");
+const jsonSchemaCloseButton = getElement<HTMLButtonElement>("jsonSchemaCloseButton");
 const importConfirm = getElement<HTMLElement>("importConfirm");
 const importStatus = getElement<HTMLElement>("importStatus");
 const importCancelButton = getElement<HTMLButtonElement>("importCancelButton");
@@ -398,6 +542,8 @@ const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let themePreference = loadThemePreference();
 let storageDialogMode: StorageDialogMode = "notice";
 
+jsonSchemaContent.textContent = getJsonSchemaDescription();
+installAutomationApi();
 applyThemePreference();
 
 editor.addEventListener("input", () => {
@@ -502,6 +648,16 @@ exportZipButton.addEventListener("click", () => {
   void exportZipBackup();
 });
 
+exportJsonButton.addEventListener("click", () => {
+  closeExportMenu();
+  exportJsonBackup();
+});
+
+jsonSchemaButton.addEventListener("click", () => {
+  closeExportMenu();
+  showJsonSchemaDialog();
+});
+
 storageUpgradeMenuButton.addEventListener("click", () => {
   closeExportMenu();
   showStorageUpgradePrompt();
@@ -535,7 +691,7 @@ importCancelButton.addEventListener("click", () => {
 
 importConfirmButton.addEventListener("click", () => {
   if (pendingImportFile) {
-    void importZipBackup(pendingImportFile);
+    void importBackup(pendingImportFile);
   }
 });
 
@@ -546,6 +702,14 @@ changelogButton.addEventListener("click", () => {
 changelogCloseButton.addEventListener("click", () => {
   markChangelogSeen();
   changelogDialog.classList.add("hidden");
+});
+
+jsonSchemaCloseButton.addEventListener("click", () => {
+  jsonSchemaDialog.classList.add("hidden");
+});
+
+jsonSchemaCopyButton.addEventListener("click", () => {
+  void copyJsonSchemaDescription();
 });
 
 storageDialogSecondaryButton.addEventListener("click", () => {
@@ -870,6 +1034,31 @@ function showImportConfirm(): void {
   importStatus.textContent = "";
   importConfirmButton.disabled = false;
   importConfirm.classList.remove("hidden");
+}
+
+function showJsonSchemaDialog(): void {
+  jsonSchemaStatus.classList.add("hidden");
+  jsonSchemaStatus.textContent = "";
+  jsonSchemaContent.textContent = getJsonSchemaDescription();
+  jsonSchemaDialog.classList.remove("hidden");
+}
+
+async function copyJsonSchemaDescription(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(getJsonSchemaDescription());
+    showJsonSchemaStatus("已复制 JSON 说明全文。", "info");
+  } catch {
+    showJsonSchemaStatus("复制失败，可以手动选中说明文本复制。", "error");
+  }
+}
+
+function getJsonSchemaDescription(): string {
+  return jsonSchemaDescription.replaceAll("__ZHUZI_ORIGIN__", window.location.origin);
+}
+
+function showJsonSchemaStatus(message: string, tone: "error" | "info"): void {
+  jsonSchemaStatus.textContent = message;
+  jsonSchemaStatus.className = `inline-status ${tone}`;
 }
 
 function renderHabitStats(): void {
@@ -1309,10 +1498,8 @@ function exportAllMarkdown(): void {
   downloadBlob(new Blob([markdown], { type: "text/markdown;charset=utf-8" }), `逐字-全部-${todayKey()}.md`);
 }
 
-async function exportZipBackup(): Promise<void> {
-  const zip = new JSZip();
-  const writtenEntries = getWrittenEntries();
-  const payload = {
+function createBackupPayload(): BackupPayload {
+  return {
     app: appName,
     schema_version: 2,
     exported_at: new Date().toISOString(),
@@ -1321,6 +1508,33 @@ async function exportZipBackup(): Promise<void> {
       theme: themePreference
     }
   };
+}
+
+function createBackupPayloadSnapshot(): BackupPayload {
+  return JSON.parse(JSON.stringify(createBackupPayload())) as BackupPayload;
+}
+
+function installAutomationApi(): void {
+  Object.defineProperty(window, "zhuzi", {
+    configurable: true,
+    value: Object.freeze({
+      version: "1",
+      getBackupPayload: createBackupPayloadSnapshot,
+      exportJson: () => JSON.stringify(createBackupPayload(), null, 2),
+      getSchemaDescription: getJsonSchemaDescription
+    } satisfies ZhuziAutomationApi)
+  });
+}
+
+function exportJsonBackup(): void {
+  const payload = createBackupPayload();
+  downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" }), `逐字-数据-${todayKey()}.json`);
+}
+
+async function exportZipBackup(): Promise<void> {
+  const zip = new JSZip();
+  const writtenEntries = getWrittenEntries();
+  const payload = createBackupPayload();
 
   zip.file("zhuzi-data.json", JSON.stringify(payload, null, 2));
   zip.file("markdown/all.md", [`# 逐字`, "", appSlogan, "", `导出时间：${payload.exported_at}`, "", ...writtenEntries.map(renderEntryMarkdown)].join("\n"));
@@ -1354,22 +1568,14 @@ async function runStorageUpgrade(): Promise<void> {
   }
 }
 
-async function importZipBackup(file: File): Promise<void> {
+async function importBackup(file: File): Promise<void> {
   importStatus.classList.add("hidden");
   importStatus.textContent = "";
   importConfirmButton.disabled = true;
   try {
-    const zip = await JSZip.loadAsync(file);
-    const dataFile = zip.file("zhuzi-data.json") ?? zip.file("char300-lab-data.json");
-    if (!dataFile) {
-      showImportStatus("没有找到逐字备份数据文件。", "error");
-      importConfirmButton.disabled = false;
-      return;
-    }
-
-    const raw = await dataFile.async("string");
-    const parsed = JSON.parse(raw) as { preferences?: { theme?: string } };
+    const parsed = await readBackupPayload(file);
     const importedState = parseImportedState(parsed);
+    const parsedPreferences = parsed as { preferences?: { theme?: string } };
     if (!importedState) {
       showImportStatus("备份数据格式不正确。", "error");
       importConfirmButton.disabled = false;
@@ -1378,8 +1584,8 @@ async function importZipBackup(file: File): Promise<void> {
 
     state = ensureTodayEntry(importedState);
     persistState(state);
-    if (parsed.preferences?.theme) {
-      themePreference = parseThemePreference(parsed.preferences.theme);
+    if (parsedPreferences.preferences?.theme) {
+      themePreference = parseThemePreference(parsedPreferences.preferences.theme);
       localStorage.setItem(themePreferenceKey, themePreference);
       applyThemePreference();
     }
@@ -1394,9 +1600,27 @@ async function importZipBackup(file: File): Promise<void> {
     refreshStorageHealthLight();
     render();
   } catch {
-    showImportStatus("导入失败，请确认 ZIP 文件来自逐字。", "error");
+    showImportStatus("导入失败，请确认备份文件来自逐字。", "error");
     importConfirmButton.disabled = false;
   }
+}
+
+async function readBackupPayload(file: File): Promise<{ preferences?: { theme?: string } } | unknown> {
+  if (isZipBackupFile(file)) {
+    const zip = await JSZip.loadAsync(file);
+    const dataFile = zip.file("zhuzi-data.json") ?? zip.file("char300-lab-data.json");
+    if (!dataFile) {
+      throw new Error("Backup JSON missing from zip");
+    }
+
+    return JSON.parse(await dataFile.async("string")) as unknown;
+  }
+
+  return JSON.parse(await file.text()) as unknown;
+}
+
+function isZipBackupFile(file: File): boolean {
+  return file.name.toLowerCase().endsWith(".zip") || file.type === "application/zip" || file.type === "application/x-zip-compressed";
 }
 
 function showImportStatus(message: string, tone: "error" | "info"): void {
