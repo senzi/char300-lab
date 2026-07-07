@@ -158,6 +158,7 @@ const description = await page.evaluate(() => window.zhuzi.getSchemaDescription(
 导入兼容
 - 逐字可以导入完整备份对象，也可以导入裸 AppState，即只包含 entries 和 active_entry_id 的对象。
 - 旧版 char300-lab-data.json 仍通过 ZIP 导入兼容。
+- JSON 备份保留完整档案状态，可能包含尚未写作或尚未保存版本的空练习；做展示或统计时可按 versions.length > 0、draft.trim() 或 lastSavedContent.trim() 自行过滤。
 `;
 
 type View = "write" | "feed" | "overview";
