@@ -352,6 +352,16 @@ h3 {
   color: var(--muted);
 }
 
+.json-schema-dialog .inline-status {
+  margin-top: 12px;
+}
+
+.json-schema-dialog .inline-status.info {
+  border-color: var(--success-bg);
+  color: var(--success);
+  background: var(--success-bg);
+}
+
 .changelog-dialog {
   max-height: min(680px, calc(100vh - 48px));
   display: flex;
