@@ -147,7 +147,7 @@ npm run preview
 
 JSON 导出得到的就是 ZIP 内 `zhuzi-data.json` 的同一份数据。
 
-Agent 或脚本可以在已打开逐字页面的浏览器上下文中读取同一份 JSON。这个接口只读，不是 HTTP API：
+推荐先手动使用“JSON 导出”，再把导出的 JSON 文件交给 AI 或脚本处理。逐字也提供页面内只读 API，适合油猴脚本或已连接到当前页面的浏览器 Agent；它不是 HTTP API。注意：普通 Playwright 新开的浏览器没有用户原 Chrome 里的逐字数据，需要连接到已有数据的浏览器上下文，或由用户先打开逐字页面后再调用：
 
 ```js
 const payload = await page.evaluate(() => window.zhuzi.getBackupPayload());

@@ -144,8 +144,10 @@ preferences.theme
 - dark: 夜间。
 
 自动化获取
-- 逐字提供页面内只读 API，不是 HTTP API。
-- 需要先打开逐字页面（__ZHUZI_ORIGIN__），再由 Playwright、浏览器 Agent 或脚本在页面上下文中调用。
+- 推荐做法：先手动使用“JSON 导出”，再把导出的 JSON 文件交给 AI 或脚本处理。
+- 逐字也提供页面内只读 API，不是 HTTP API，适合油猴脚本或已连接到当前页面的浏览器 Agent。
+- 注意：普通 Playwright 新开的浏览器没有用户原 Chrome 里的逐字数据。
+- 自动化脚本需要连接到已有数据的浏览器上下文，或由用户先打开逐字页面（__ZHUZI_ORIGIN__）后再调用 window.zhuzi。
 - getBackupPayload() 返回 JSON 快照对象；exportJson() 返回格式化后的 JSON 字符串。
 
 示例
