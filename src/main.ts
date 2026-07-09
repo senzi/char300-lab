@@ -5,7 +5,7 @@ import logoUrl from "./assets/logo.svg";
 import { diffTexts, summarizeDiff } from "./diff";
 import { getTokenStats } from "./tokenizer";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
-import { canOfferOpfsUpgrade, createTodayPractice, deleteEntry, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistState, saveVersion, shouldShowOpfsUpgradePrompt, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
+import { canOfferOpfsUpgrade, createTodayPractice, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistState, pruneHistoricalEmptyEntries, saveVersion, shouldShowOpfsUpgradePrompt, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
@@ -16,6 +16,15 @@ const themePreferenceKey = "zhuzi-theme-preference-v1";
 const writingYearGoalDays = 365;
 const writingMilestones = [3, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 120, 150, 180, 210, 240, 270, 300, 330, 365];
 const changelog: ChangelogEntry[] = [
+  {
+    version: "0.2.5",
+    date: "2026-07-09",
+    title: "体验细节优化",
+    items: [
+      "微调写作、阅读流和总览里的若干交互与排版细节。",
+      "优化多篇练习、版本信息和移动端展示的使用体验。"
+    ]
+  },
   {
     version: "0.2.4",
     date: "2026-07-07",
@@ -226,7 +235,7 @@ declare global {
   }
 }
 
-let state: AppState = ensureTodayEntry(loadState());
+let state: AppState = ensureTodayEntry(pruneHistoricalEmptyEntries(loadState()));
 let view: View = "write";
 let detailMode: DetailMode = "writing";
 let selectedVersionId: string | null = getActiveEntry(state).current_version_id;
@@ -277,7 +286,6 @@ app.innerHTML = `
             <button class="export-menu-upgrade hidden" id="storageUpgradeMenuButton" type="button">升级本地存储</button>
           </div>
         </div>
-        <button class="button primary" id="saveButton" type="button">保存版本</button>
       </div>
       <input class="hidden" id="importZipInput" type="file" accept=".zip,.json,application/zip,application/json" />
     </header>
@@ -340,7 +348,6 @@ app.innerHTML = `
             <div class="practice-bar">
               <div class="practice-tabs" id="practiceTabs"></div>
               <div class="practice-actions">
-                <button class="button small" id="deletePracticeButton" type="button">删除空练习</button>
                 <button class="button small" id="newPracticeButton" type="button">新练习</button>
               </div>
             </div>
@@ -401,7 +408,6 @@ app.innerHTML = `
       <section class="overview-board">
         <div class="overview-section-head">
           <h3>每日数据</h3>
-          <span>按已推进日期展示，不含正文</span>
         </div>
         <div class="overview-bars" id="overviewBars"></div>
       </section>
@@ -477,7 +483,6 @@ const appMark = getElement<HTMLImageElement>("appMark");
 const todayButton = getElement<HTMLButtonElement>("todayButton");
 const themeHint = getElement<HTMLElement>("themeHint");
 const themeButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".theme-icon-button[data-theme]"));
-const saveButton = getElement<HTMLButtonElement>("saveButton");
 const exportButton = getElement<HTMLButtonElement>("exportButton");
 const exportMenu = getElement<HTMLElement>("exportMenu");
 const exportImageButton = getElement<HTMLButtonElement>("exportImageButton");
@@ -508,7 +513,6 @@ const overviewBars = getElement<HTMLElement>("overviewBars");
 const historyEditNotice = getElement<HTMLElement>("historyEditNotice");
 const unlockHistoryEditButton = getElement<HTMLButtonElement>("unlockHistoryEditButton");
 const practiceTabs = getElement<HTMLElement>("practiceTabs");
-const deletePracticeButton = getElement<HTMLButtonElement>("deletePracticeButton");
 const newPracticeButton = getElement<HTMLButtonElement>("newPracticeButton");
 const timeline = getElement<HTMLElement>("timeline");
 const meter = getElement<HTMLElement>("meter");
@@ -560,20 +564,8 @@ editor.addEventListener("input", () => {
   render();
 });
 
-saveButton.addEventListener("click", () => {
-  if (!canEditActiveEntry()) {
-    return;
-  }
-
-  state = saveVersion(state);
-  selectedVersionId = getActiveEntry(state).current_version_id;
-  detailMode = "writing";
-  persistState(state);
-  render();
-});
-
 todayButton.addEventListener("click", () => {
-  state = ensureTodayEntry(state);
+  state = ensureTodayEntry(pruneHistoricalEmptyEntries(state));
   selectedVersionId = getActiveEntry(state).current_version_id;
   detailMode = "writing";
   historyEditUnlockedEntryId = null;
@@ -583,6 +575,10 @@ todayButton.addEventListener("click", () => {
 });
 
 newPracticeButton.addEventListener("click", () => {
+  if (hasEmptyTodayPractice()) {
+    return;
+  }
+
   state = createTodayPractice(state);
   selectedVersionId = getActiveEntry(state).current_version_id;
   detailMode = "writing";
@@ -591,24 +587,6 @@ newPracticeButton.addEventListener("click", () => {
   persistState(state);
   render();
   editor.focus();
-});
-
-deletePracticeButton.addEventListener("click", () => {
-  const activeEntry = getActiveEntry(state);
-  if (!canDeleteActivePractice(activeEntry)) {
-    return;
-  }
-
-  if (activeEntry.draft.trim() && !window.confirm("这篇练习还没有保存版本，删除后草稿也会消失。确定删除吗？")) {
-    return;
-  }
-
-  state = deleteEntry(state, activeEntry.entry_id);
-  selectedVersionId = getActiveEntry(state).current_version_id;
-  detailMode = "writing";
-  historyEditUnlockedEntryId = null;
-  persistState(state);
-  render();
 });
 
 exportButton.addEventListener("click", () => {
@@ -772,6 +750,7 @@ unlockHistoryEditButton.addEventListener("click", () => {
 });
 
 render();
+installPracticeTabDragScroll();
 refreshStorageUpgradeEntry();
 refreshStorageHealthLight();
 registerServiceWorker();
@@ -783,6 +762,18 @@ if (shouldShowOpfsUpgradePrompt()) {
   showStorageNoticeIfNeeded();
 }
 void hydrateActiveStorage();
+
+function saveActiveVersion(): void {
+  if (!canEditActiveEntry()) {
+    return;
+  }
+
+  state = saveVersion(state);
+  selectedVersionId = getActiveEntry(state).current_version_id;
+  detailMode = "writing";
+  persistState(state);
+  render();
+}
 
 function render(): void {
   const activeEntry = getActiveEntry(state);
@@ -806,10 +797,8 @@ function render(): void {
   editor.classList.toggle("hidden", detailMode === "version");
   reader.classList.toggle("hidden", detailMode === "writing");
   historyEditNotice.classList.toggle("hidden", !isHistoricalWriting || canEdit);
-  newPracticeButton.disabled = !isTodayEntry(activeEntry);
-  deletePracticeButton.disabled = !canDeleteActivePractice(activeEntry);
+  newPracticeButton.disabled = !isTodayEntry(activeEntry) || hasEmptyTodayPractice();
   editor.disabled = !canEdit;
-  saveButton.disabled = !canEdit || activeEntry.draft === activeEntry.lastSavedContent;
   exportImageButton.disabled = activeEntry.versions.length === 0;
   exportDayMarkdownButton.disabled = activeEntry.versions.length === 0;
   exportAllMarkdownButton.disabled = !state.entries.some((entry) => entry.versions.length > 0);
@@ -823,7 +812,9 @@ function render(): void {
     <div><strong>${activeStats.punctuation_units}</strong><span>标点</span></div>
     <div><strong>${activeStats.han_units}</strong><span>汉字</span></div>
     <div><strong>${activeStats.latin_units + activeStats.number_units}</strong><span>字母/数字</span></div>
+    <button class="button primary save-inline" type="button" ${!canEdit || activeEntry.draft === activeEntry.lastSavedContent ? "disabled" : ""}>保存版本</button>
   `;
+  statsRow.querySelector<HTMLButtonElement>(".save-inline")?.addEventListener("click", saveActiveVersion);
 
   renderHabitStats();
   renderPracticeTabs(activeEntry);
@@ -876,7 +867,7 @@ async function hydrateActiveStorage(): Promise<void> {
     return;
   }
 
-  state = ensureTodayEntry(opfsState);
+  state = ensureTodayEntry(pruneHistoricalEmptyEntries(opfsState));
   selectedVersionId = getActiveEntry(state).current_version_id;
   detailMode = "writing";
   historyEditUnlockedEntryId = null;
@@ -1071,7 +1062,7 @@ function renderHabitStats(): void {
   const writingGoalLabel = nextMilestone
     ? `已写 ${stats.writtenDays} 天，下一站 ${nextMilestone} 天`
     : `已写 ${stats.writtenDays} 天，年度目标完成`;
-  entryCount.textContent = String(stats.writtenDays);
+  entryCount.textContent = `${stats.writtenDays} 天`;
   habitStats.innerHTML = `
     <div class="habit-goal"><strong>先坚持一年</strong><span>${writingGoalLabel}</span></div>
     <div><strong>${articleCount}</strong><span>文字篇数</span></div>
@@ -1111,6 +1102,78 @@ function renderPracticeTabs(activeEntry: DailyEntry): void {
       render();
     });
   });
+}
+
+function installPracticeTabDragScroll(): void {
+  let pointerId: number | null = null;
+  let startX = 0;
+  let startScrollLeft = 0;
+  let dragged = false;
+  let suppressNextClick = false;
+
+  practiceTabs.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startScrollLeft = practiceTabs.scrollLeft;
+    dragged = false;
+  });
+
+  practiceTabs.addEventListener("pointermove", (event) => {
+    if (pointerId !== event.pointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - startX;
+    if (Math.abs(deltaX) > 6) {
+      if (!dragged) {
+        dragged = true;
+        practiceTabs.setPointerCapture(event.pointerId);
+      }
+      practiceTabs.classList.add("dragging");
+    }
+    practiceTabs.scrollLeft = startScrollLeft - deltaX;
+  });
+
+  practiceTabs.addEventListener("pointerup", (event) => {
+    if (pointerId !== event.pointerId) {
+      return;
+    }
+
+    pointerId = null;
+    if (dragged) {
+      suppressNextClick = true;
+      window.setTimeout(() => {
+        suppressNextClick = false;
+      }, 0);
+    }
+    dragged = false;
+    practiceTabs.classList.remove("dragging");
+  });
+
+  practiceTabs.addEventListener("pointercancel", () => {
+    pointerId = null;
+    dragged = false;
+    suppressNextClick = false;
+    practiceTabs.classList.remove("dragging");
+  });
+
+  practiceTabs.addEventListener(
+    "click",
+    (event) => {
+      if (!suppressNextClick) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      suppressNextClick = false;
+    },
+    true
+  );
 }
 
 function renderCalendarList(): void {
@@ -1153,7 +1216,7 @@ function renderCalendarList(): void {
 }
 
 function renderTimeline(entry: DailyEntry): void {
-  versionCount.textContent = String(entry.versions.length);
+  versionCount.textContent = `${entry.versions.length} 版`;
   if (entry.versions.length === 0) {
     timeline.innerHTML = `<p class="empty">保存今天的初稿后，版本时间线会出现在这里。</p>`;
     return;
@@ -1313,7 +1376,7 @@ function renderOverview(): void {
     <div><strong>${averageArticleWords}</strong><span>篇均终稿字数</span></div>
     <div><strong>${averageVersions}</strong><span>日均版本</span></div>
   `;
-  overviewGridMeta.textContent = `${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 +${insertedTotal} -${deletedTotal}`;
+  overviewGridMeta.innerHTML = `${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 ${renderInlineDelta(insertedTotal, deletedTotal)}`;
   overviewYearGrid.innerHTML = days
     .map((day, index) => {
       const level = getOverviewLevel(day, intensityMax);
@@ -1328,7 +1391,7 @@ function renderOverview(): void {
     renderOverviewBarTrack("日修改量", elapsedDays, intensityMax, (day) => day.churn, (day) => `+${day.inserted} -${day.deleted}`),
     `<div class="overview-callout">
       <strong>修改量最高</strong>
-      <span>${bestChurnDay ? `${formatShortDate(bestChurnDay.key)} · +${bestChurnDay.inserted} -${bestChurnDay.deleted}` : "保存版本后，这里会出现当日修改量。"}</span>
+      <span>${bestChurnDay ? `${formatShortDate(bestChurnDay.key)} · ${renderInlineDelta(bestChurnDay.inserted, bestChurnDay.deleted)}` : "保存版本后，这里会出现当日修改量。"}</span>
     </div>`
   ].join("");
 }
@@ -1340,6 +1403,7 @@ function renderOverviewBarTrack(
   getValue: (day: OverviewDay) => number,
   getTitle: (day: OverviewDay) => string
 ): string {
+  const peakValue = Math.max(...days.map(getValue), 0);
   return `
     <div class="overview-track">
       <span>${label}</span>
@@ -1349,7 +1413,8 @@ function renderOverviewBarTrack(
             const value = getValue(day);
             const height = day.state === "future" || value === 0 ? 2 : Math.max(4, Math.round((value / maxValue) * 28));
             const title = `${day.key} · ${getTitle(day)}`;
-            return `<i class="${day.state}" style="height: ${height}px" title="${title}" aria-label="${title}"></i>`;
+            const peak = value > 0 && value === peakValue ? " peak" : "";
+            return `<i class="${day.state}${peak}" style="height: ${height}px" title="${title}" aria-label="${title}" tabindex="0"></i>`;
           })
           .join("")}
       </div>
@@ -1682,7 +1747,7 @@ function renderSummaryChips(summary: ReturnType<typeof summarizeDiff>, iteration
   return `
     <span><b>文字</b> ${renderInlineDelta(textInsertCount(summary), textDeleteCount(summary))}</span>
     <span><b>标点</b> ${renderInlineDelta(summary.punctuation.insert, summary.punctuation.delete)}</span>
-    <span><b>迭代</b> ${iterations}</span>
+    <span><b>迭代</b> ${iterations} 版</span>
   `;
 }
 
@@ -1932,8 +1997,12 @@ function canEditActiveEntry(): boolean {
   return detailMode === "writing" && (isTodayEntry(activeEntry) || historyEditUnlockedEntryId === activeEntry.entry_id);
 }
 
-function canDeleteActivePractice(entry = getActiveEntry(state)): boolean {
-  return entry.versions.length === 0 && getEntriesForDate(entry.date_key).length > 1;
+function hasEmptyTodayPractice(): boolean {
+  return state.entries.some((entry) => entry.date_key === todayKey() && isEmptyPractice(entry));
+}
+
+function isEmptyPractice(entry: DailyEntry): boolean {
+  return entry.versions.length === 0 && entry.draft.trim() === "";
 }
 
 function isCrossDayVersion(entry: DailyEntry, version: Version): boolean {

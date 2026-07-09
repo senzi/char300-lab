@@ -133,6 +133,21 @@ export function ensureTodayEntry(state: AppState): AppState {
   };
 }
 
+export function pruneHistoricalEmptyEntries(state: AppState): AppState {
+  const key = todayKey();
+  const entries = state.entries.filter((entry) => entry.date_key === key || !isEmptyPracticeEntry(entry));
+  if (entries.length === state.entries.length) {
+    return state;
+  }
+
+  const nextEntries = entries.length ? sortEntries(entries) : [createPracticeEntry(key, 1)];
+  const active = nextEntries.find((entry) => entry.entry_id === state.active_entry_id) ?? nextEntries[0];
+  return {
+    entries: nextEntries,
+    active_entry_id: active.entry_id
+  };
+}
+
 export function createTodayPractice(state: AppState): AppState {
   const key = todayKey();
   const entry = createPracticeEntry(key, state.entries.filter((item) => item.date_key === key).length + 1);
@@ -293,6 +308,10 @@ function updateActiveEntry(state: AppState, updater: (entry: DailyEntry) => Dail
     active_entry_id: updated.entry_id,
     entries: sortEntries(state.entries.map((entry) => (entry.entry_id === updated.entry_id ? updated : entry)))
   };
+}
+
+function isEmptyPracticeEntry(entry: DailyEntry): boolean {
+  return entry.versions.length === 0 && entry.draft.trim() === "";
 }
 
 export function normalizeState(state: AppState): AppState {

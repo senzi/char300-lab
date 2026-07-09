@@ -519,6 +519,11 @@ h3 {
   gap: 16px;
 }
 
+.overview-panel > .panel-head,
+.side-panel > .panel-head {
+  padding: 0 8px;
+}
+
 .modebar {
   flex: 0 0 auto;
   margin-bottom: 12px;
@@ -588,11 +593,14 @@ h3 {
 }
 
 .count-pill {
-  min-width: 34px;
+  min-width: 42px;
   border-radius: 999px;
-  padding: 6px 10px;
-  background: var(--subtle);
+  padding: 5px 9px;
+  color: var(--muted);
+  background: var(--subtle-faint);
+  font-size: 13px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .habit-stats {
@@ -626,6 +634,11 @@ h3 {
 
 .stats-row span {
   font-size: 14px;
+}
+
+.save-inline {
+  min-width: 96px;
+  align-self: stretch;
 }
 
 .habit-stats span,
@@ -796,7 +809,8 @@ h3 {
 
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: stretch;
   gap: 7px;
   margin: 16px 0 12px;
 }
@@ -806,6 +820,7 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
 }
 
 .practice-tabs {
@@ -813,7 +828,16 @@ h3 {
   min-width: 0;
   gap: 6px;
   overflow: auto;
+  cursor: grab;
+  mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
   scrollbar-width: none;
+  user-select: none;
+  touch-action: pan-x;
+}
+
+.practice-tabs.dragging {
+  cursor: grabbing;
 }
 
 .practice-tabs::-webkit-scrollbar {
@@ -979,7 +1003,16 @@ mark {
   color: var(--danger);
 }
 
-.feed-view,
+.feed-view {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  padding: 6px 0 0;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
 .overview-view {
   display: flex;
   flex: 1;
@@ -1139,6 +1172,12 @@ body.theme-dark .year-cell.written.level-3 {
   gap: 1px;
   min-height: 42px;
   border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.overview-track div::-webkit-scrollbar {
+  display: none;
 }
 
 .overview-track i {
@@ -1147,6 +1186,11 @@ body.theme-dark .year-cell.written.level-3 {
   border-radius: 2px 2px 0 0;
   background: var(--text);
   opacity: 0.72;
+}
+
+.overview-track i.peak {
+  background: var(--success);
+  opacity: 1;
 }
 
 .overview-track i.absent {
@@ -1163,10 +1207,7 @@ body.theme-dark .year-cell.written.level-3 {
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: var(--subtle-faint);
+  padding-top: 2px;
 }
 
 .overview-callout strong {
@@ -1371,6 +1412,10 @@ body.theme-dark .year-cell.written.level-3 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .save-inline {
+    grid-column: 1 / -1;
+  }
+
   .overview-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1390,6 +1435,10 @@ body.theme-dark .year-cell.written.level-3 {
   .practice-bar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .practice-tabs {
+    padding-bottom: 1px;
   }
 
   .practice-actions {
