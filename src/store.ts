@@ -6,6 +6,7 @@ const storageKey = "char300-lab-state-v2";
 const legacyStorageKey = "char300-lab-state-v1";
 const opfsUpgradeKey = "char300-lab-opfs-upgrade-v1";
 const opfsUpgradeDismissedKey = "char300-lab-opfs-upgrade-dismissed-v1";
+const draftJournalKey = "char300-lab-draft-journal-v1";
 const opfsDirectoryName = "char300";
 const opfsCheckpointName = "checkpoint.json";
 const opfsMetaName = "meta.json";
@@ -31,6 +32,20 @@ let opfsWriteEnabled = false;
 let opfsStorageHealthy = false;
 let storageStatus: StorageStatus = { kind: "local-fallback", lastSavedAt: null };
 const storageStatusListeners = new Set<() => void>();
+let pendingOpfsState: AppState | null = null;
+let opfsWritePromise: Promise<void> | null = null;
+let opfsWriteTimer: ReturnType<typeof setTimeout> | null = null;
+let lastLocalStorageWriteSucceeded = false;
+
+type LegacyDraftJournal = {
+  entry_id: string;
+  draft: string;
+  updated_at: string;
+};
+
+type DraftJournal = {
+  entries: Record<string, { draft: string; updated_at: string }>;
+};
 
 export function todayKey(): string {
   return dateKey(new Date());
@@ -81,9 +96,8 @@ export function loadState(): AppState {
   const raw = localStorage.getItem(storageKey);
   if (raw) {
     try {
-      const normalized = normalizeState(JSON.parse(raw) as AppState);
+      const normalized = applyDraftJournal(normalizeState(JSON.parse(raw) as AppState));
       configureStorageForLoadedState(normalized);
-      persistState(normalized);
       return normalized;
     } catch {
       return createEmptyState();
@@ -101,7 +115,7 @@ export function loadState(): AppState {
   }
 
   try {
-    const migrated = normalizeLegacySingleEntryState(JSON.parse(legacyRaw) as LegacySingleEntryState);
+    const migrated = applyDraftJournal(normalizeLegacySingleEntryState(JSON.parse(legacyRaw) as LegacySingleEntryState));
     configureStorageForLoadedState(migrated);
     persistState(migrated);
     return migrated;
@@ -121,24 +135,15 @@ export function persistState(state: AppState): void {
   try {
     localStorage.setItem(storageKey, JSON.stringify(state));
     localStorageSaved = true;
+    lastLocalStorageWriteSucceeded = true;
+    localStorage.removeItem(draftJournalKey);
   } catch {
     localStorageSaved = false;
+    lastLocalStorageWriteSucceeded = false;
   }
 
   if (opfsWriteEnabled) {
-    setStorageStatus({ kind: "opfs-saving", lastSavedAt: storageStatus.lastSavedAt });
-    void writeOpfsState(state)
-      .then(() => {
-        opfsStorageHealthy = true;
-        setStorageStatus({ kind: "opfs-saved", lastSavedAt: new Date().toISOString() });
-      })
-      .catch(() => {
-        opfsStorageHealthy = false;
-        setStorageStatus({
-          kind: localStorageSaved ? "local-fallback" : "save-error",
-          lastSavedAt: localStorageSaved ? new Date().toISOString() : storageStatus.lastSavedAt
-        });
-      });
+    scheduleOpfsWrite(state, true);
     return;
   }
 
@@ -146,6 +151,27 @@ export function persistState(state: AppState): void {
     kind: localStorageSaved ? "local-fallback" : "save-error",
     lastSavedAt: localStorageSaved ? new Date().toISOString() : storageStatus.lastSavedAt
   });
+}
+
+export function persistDraftState(state: AppState): void {
+  if (!opfsWriteEnabled) {
+    persistState(state);
+    return;
+  }
+
+  const active = getActiveEntry(state);
+  try {
+    const journal = readDraftJournal();
+    journal.entries[active.entry_id] = { draft: active.draft, updated_at: active.updated_at };
+    localStorage.setItem(
+      draftJournalKey,
+      JSON.stringify(journal)
+    );
+    lastLocalStorageWriteSucceeded = true;
+  } catch {
+    lastLocalStorageWriteSucceeded = false;
+  }
+  scheduleOpfsWrite(state);
 }
 
 export function getStorageStatus(): StorageStatus {
@@ -262,9 +288,15 @@ export async function hydrateOpfsStorage(currentState: AppState): Promise<AppSta
       return null;
     }
 
-    localStorage.setItem(storageKey, JSON.stringify(stored));
+    const recovered = applyDraftJournal(stored);
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(recovered));
+      lastLocalStorageWriteSucceeded = true;
+    } catch {
+      lastLocalStorageWriteSucceeded = false;
+    }
     setStorageStatus({ kind: "opfs-saved", lastSavedAt: new Date().toISOString() });
-    return stored;
+    return recovered;
   } catch {
     opfsWriteEnabled = false;
     opfsStorageHealthy = false;
@@ -351,7 +383,7 @@ function updateActiveEntry(state: AppState, updater: (entry: DailyEntry) => Dail
   return {
     ...state,
     active_entry_id: updated.entry_id,
-    entries: sortEntries(state.entries.map((entry) => (entry.entry_id === updated.entry_id ? updated : entry)))
+    entries: state.entries.map((entry) => (entry.entry_id === updated.entry_id ? updated : entry))
   };
 }
 
@@ -418,7 +450,7 @@ async function getOpfsDirectory(): Promise<FileSystemDirectoryHandle> {
 
 async function writeOpfsState(state: AppState): Promise<void> {
   const dir = await getOpfsDirectory();
-  await writeTextFile(dir, opfsCheckpointName, JSON.stringify(normalizeState(state)));
+  await writeTextFile(dir, opfsCheckpointName, JSON.stringify(state));
   await writeTextFile(
     dir,
     opfsMetaName,
@@ -428,6 +460,59 @@ async function writeOpfsState(state: AppState): Promise<void> {
       storage: "opfs-checkpoint"
     })
   );
+}
+
+function scheduleOpfsWrite(state: AppState, immediate = false): void {
+  pendingOpfsState = state;
+  setStorageStatus({ kind: "opfs-saving", lastSavedAt: storageStatus.lastSavedAt });
+  if (opfsWritePromise) {
+    return;
+  }
+
+  if (opfsWriteTimer !== null) {
+    clearTimeout(opfsWriteTimer);
+    opfsWriteTimer = null;
+  }
+
+  if (immediate) {
+    startOpfsWriteDrain();
+    return;
+  }
+
+  opfsWriteTimer = setTimeout(startOpfsWriteDrain, 400);
+}
+
+function startOpfsWriteDrain(): void {
+  opfsWriteTimer = null;
+  if (opfsWritePromise || !pendingOpfsState) {
+    return;
+  }
+
+  opfsWritePromise = drainOpfsWrites().finally(() => {
+    opfsWritePromise = null;
+    if (pendingOpfsState) {
+      scheduleOpfsWrite(pendingOpfsState);
+    }
+  });
+}
+
+async function drainOpfsWrites(): Promise<void> {
+  try {
+    while (pendingOpfsState) {
+      const nextState = pendingOpfsState;
+      pendingOpfsState = null;
+      await writeOpfsState(nextState);
+    }
+    opfsStorageHealthy = true;
+    setStorageStatus({ kind: "opfs-saved", lastSavedAt: new Date().toISOString() });
+  } catch {
+    opfsStorageHealthy = false;
+    pendingOpfsState = null;
+    setStorageStatus({
+      kind: lastLocalStorageWriteSucceeded ? "local-fallback" : "save-error",
+      lastSavedAt: lastLocalStorageWriteSucceeded ? new Date().toISOString() : storageStatus.lastSavedAt
+    });
+  }
 }
 
 async function readOpfsState(): Promise<AppState | null> {
@@ -461,6 +546,44 @@ function setStorageStatus(nextStatus: StorageStatus): void {
   storageStatusListeners.forEach((listener) => listener());
 }
 
+function applyDraftJournal(state: AppState): AppState {
+  const journal = readDraftJournal();
+  return {
+    ...state,
+    entries: state.entries.map((entry) => {
+      const recovered = journal.entries[entry.entry_id];
+      return recovered && recovered.updated_at > entry.updated_at
+        ? { ...entry, draft: recovered.draft, updated_at: recovered.updated_at }
+        : entry;
+    })
+  };
+}
+
+function readDraftJournal(): DraftJournal {
+  const raw = localStorage.getItem(draftJournalKey);
+  if (!raw) {
+    return { entries: {} };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<DraftJournal & LegacyDraftJournal>;
+    if (parsed.entries && typeof parsed.entries === "object") {
+      const entries = Object.fromEntries(
+        Object.entries(parsed.entries).filter(
+          ([, value]) => value && typeof value.draft === "string" && typeof value.updated_at === "string"
+        )
+      );
+      return { entries };
+    }
+    if (typeof parsed.entry_id === "string" && typeof parsed.draft === "string" && typeof parsed.updated_at === "string") {
+      return { entries: { [parsed.entry_id]: { draft: parsed.draft, updated_at: parsed.updated_at } } };
+    }
+  } catch {
+    // Ignore a malformed recovery journal and keep the durable snapshot intact.
+  }
+  return { entries: {} };
+}
+
 function normalizeEntry(entry: DailyEntry): DailyEntry {
   const createdAt = entry.created_at ?? new Date().toISOString();
   const key = entry.date_key ?? dateKey(new Date(createdAt));
@@ -468,20 +591,35 @@ function normalizeEntry(entry: DailyEntry): DailyEntry {
     ...createEntry(key, createdAt),
     ...entry,
     date_key: key,
-    optional_title: key,
+    optional_title: typeof entry.optional_title === "string" ? entry.optional_title : key,
     draft: entry.draft ?? entry.lastSavedContent ?? "",
     lastSavedContent: entry.lastSavedContent ?? entry.draft ?? ""
   };
   const versions = (entry.versions ?? []).map((version, index, versionsList) => ({
     ...version,
-    token_stats: getTokenStats(version.content),
-    diff_from_previous: diffTexts(versionsList[index - 1]?.content ?? "", version.content)
+    token_stats: hasStoredTokenStats(version) ? version.token_stats : getTokenStats(version.content),
+    diff_from_previous: Array.isArray(version.diff_from_previous)
+      ? version.diff_from_previous
+      : diffTexts(versionsList[index - 1]?.content ?? "", version.content)
   }));
 
   return {
     ...base,
     versions
   };
+}
+
+function hasStoredTokenStats(version: Version): boolean {
+  const stats = version.token_stats;
+  return Boolean(
+    stats &&
+      Number.isFinite(stats.text_units) &&
+      Number.isFinite(stats.punctuation_units) &&
+      Number.isFinite(stats.total_units) &&
+      Number.isFinite(stats.han_units) &&
+      Number.isFinite(stats.latin_units) &&
+      Number.isFinite(stats.number_units)
+  );
 }
 
 function sortEntries(entries: DailyEntry[]): DailyEntry[] {

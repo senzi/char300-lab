@@ -3,10 +3,11 @@ import JSZip from "jszip";
 import logoDarkUrl from "./assets/logo-dark.svg";
 import logoUrl from "./assets/logo.svg";
 import { generateCompressedZip, readBackupPayload } from "./backup";
-import { diffTexts, summarizeDiff } from "./diff";
+import { summarizeDiff } from "./diff";
 import { getTokenStats } from "./tokenizer";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
-import { canOfferOpfsUpgrade, createTodayPractice, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, getStorageStatus, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistState, pruneHistoricalEmptyEntries, saveVersion, shouldShowOpfsUpgradePrompt, subscribeStorageStatus, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
+import { getOverviewExportBarLayout, overviewExportTrackWidth } from "./overview-layout";
+import { canOfferOpfsUpgrade, createTodayPractice, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, getStorageStatus, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistDraftState, persistState, pruneHistoricalEmptyEntries, saveVersion, shouldShowOpfsUpgradePrompt, subscribeStorageStatus, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
@@ -20,11 +21,8 @@ const changelog: ChangelogEntry[] = [
   {
     version: "0.2.6",
     date: "2026-07-11",
-    title: "安全迭代基线",
-    items: [
-      "建立数据兼容测试、合成档案性能基线和基础持续集成检查。",
-      "统一应用与离线缓存版本，并增强本地存储状态反馈。"
-    ]
+    title: "体验与稳定性优化",
+    items: ["优化长期写作档案的稳定性与使用体验。"]
   },
   {
     version: "0.2.5",
@@ -252,8 +250,21 @@ let selectedVersionId: string | null = getActiveEntry(state).current_version_id;
 let pendingImportFile: File | null = null;
 let historyEditUnlockedEntryId: string | null = null;
 let themeHintTimer: number | null = null;
+const entrySummaryCache = new Map<string, { signature: string; summary: ReturnType<typeof summarizeDiff> }>();
+const crossDayCache = new Map<string, { signature: string; hasCrossDayVersion: boolean }>();
+let indexedEntriesReference: DailyEntry[] | null = null;
+let entriesByDate = new Map<string, DailyEntry[]>();
+const feedPageSize = 40;
+let feedVisibleCount = feedPageSize;
+let summaryWarmupGeneration = 0;
 
-persistState(state);
+function resetDerivedCaches(): void {
+  entrySummaryCache.clear();
+  crossDayCache.clear();
+  indexedEntriesReference = null;
+  entriesByDate = new Map();
+  summaryWarmupGeneration += 1;
+}
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -433,10 +444,10 @@ app.innerHTML = `
       <span aria-hidden="true">|</span>
       <a href="https://weibo.com/1401527553/R71bIwAVs" target="_blank" rel="noreferrer">灵感来源</a>
       <span aria-hidden="true">|</span>
-      <button class="storage-health-light storage-health-light-red" id="storageHealthLight" type="button" aria-label="localStorage 保底" title="localStorage 保底">
+      <span class="storage-health-light storage-health-light-red" id="storageHealthLight" aria-label="localStorage 保底" title="localStorage 保底">
         <span aria-hidden="true"></span>
         <strong id="storageHealthText">localStorage 保底</strong>
-      </button>
+      </span>
     </footer>
   </main>
   <div class="notice-backdrop hidden" id="importConfirm" role="dialog" aria-modal="true" aria-labelledby="importConfirmTitle">
@@ -558,7 +569,7 @@ const storageDialogStatus = getElement<HTMLElement>("storageDialogStatus");
 const storageDialogDontShow = getElement<HTMLInputElement>("storageDialogDontShow");
 const storageDialogSecondaryButton = getElement<HTMLButtonElement>("storageDialogSecondaryButton");
 const storageDialogPrimaryButton = getElement<HTMLButtonElement>("storageDialogPrimaryButton");
-const storageHealthLight = getElement<HTMLButtonElement>("storageHealthLight");
+const storageHealthLight = getElement<HTMLElement>("storageHealthLight");
 const storageHealthText = getElement<HTMLElement>("storageHealthText");
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let themePreference = loadThemePreference();
@@ -576,8 +587,8 @@ editor.addEventListener("input", () => {
   }
 
   state = updateDraft(state, editor.value);
-  persistState(state);
-  render();
+  persistDraftState(state);
+  renderInputState();
 });
 
 todayButton.addEventListener("click", () => {
@@ -729,12 +740,6 @@ storageDialogPrimaryButton.addEventListener("click", () => {
   storageDialog.classList.add("hidden");
 });
 
-storageHealthLight.addEventListener("click", () => {
-  if (!isOpfsStorageActive() && canOfferOpfsUpgrade()) {
-    showStorageUpgradePrompt();
-  }
-});
-
 colorSchemeQuery.addEventListener("change", () => {
   if (themePreference === "auto") {
     applyThemePreference();
@@ -766,18 +771,12 @@ unlockHistoryEditButton.addEventListener("click", () => {
 });
 
 render();
+scheduleEntrySummaryWarmup();
 installPracticeTabDragScroll();
 refreshStorageUpgradeEntry();
 refreshStorageHealthLight();
 registerServiceWorker();
-if (shouldShowOpfsUpgradePrompt()) {
-  showStorageUpgradePrompt();
-} else if (shouldShowChangelogOnLaunch()) {
-  showChangelogDialog();
-} else {
-  showStorageNoticeIfNeeded();
-}
-void hydrateActiveStorage();
+void initializeStorageAndPrompts();
 
 function saveActiveVersion(): void {
   if (!canEditActiveEntry()) {
@@ -793,32 +792,59 @@ function saveActiveVersion(): void {
 
 function render(): void {
   const activeEntry = getActiveEntry(state);
-  const selectedVersion = getSelectedVersion(activeEntry);
-  const activeContent = detailMode === "version" ? selectedVersion?.content ?? activeEntry.draft : activeEntry.draft;
-  const activeStats = getTokenStats(activeContent);
-  const overLimit = activeStats.total_units > 300;
-  const progress = Math.min(activeStats.total_units / 300, 1);
-  const canEdit = canEditActiveEntry();
-  const isHistoricalWriting = !isTodayEntry(activeEntry) && detailMode === "writing";
 
   dateTitle.textContent = formatDisplayDate(activeEntry.date_key);
-  editor.value = activeEntry.draft;
-  document.body.classList.toggle("over-limit", overLimit);
   writeViewButton.classList.toggle("active", view === "write");
   feedViewButton.classList.toggle("active", view === "feed");
   overviewViewButton.classList.toggle("active", view === "overview");
   writingWorkspace.classList.toggle("hidden", view !== "write");
   feedView.classList.toggle("hidden", view !== "feed");
   overviewView.classList.toggle("hidden", view !== "overview");
+  exportImageButton.disabled = activeEntry.versions.length === 0;
+  exportDayMarkdownButton.disabled = activeEntry.versions.length === 0;
+  exportAllMarkdownButton.disabled = !state.entries.some((entry) => entry.versions.length > 0);
+
+  if (view === "feed") {
+    renderFeed();
+    return;
+  }
+
+  if (view === "overview") {
+    renderOverview();
+    return;
+  }
+
+  const selectedVersion = getSelectedVersion(activeEntry);
+  const activeContent = detailMode === "version" ? selectedVersion?.content ?? activeEntry.draft : activeEntry.draft;
+  const canEdit = canEditActiveEntry();
+  const isHistoricalWriting = !isTodayEntry(activeEntry) && detailMode === "writing";
+  editor.value = activeEntry.draft;
   editor.classList.toggle("hidden", detailMode === "version");
   reader.classList.toggle("hidden", detailMode === "writing");
   historyEditNotice.classList.toggle("hidden", !isHistoricalWriting || canEdit);
   newPracticeButton.disabled = !isTodayEntry(activeEntry) || hasEmptyTodayPractice();
   editor.disabled = !canEdit;
-  exportImageButton.disabled = activeEntry.versions.length === 0;
-  exportDayMarkdownButton.disabled = activeEntry.versions.length === 0;
-  exportAllMarkdownButton.disabled = !state.entries.some((entry) => entry.versions.length > 0);
+  renderEditorMetrics(activeEntry, activeContent, canEdit);
+  renderHabitStats();
+  renderPracticeTabs(activeEntry);
+  renderCalendarList();
+  renderTimeline(activeEntry);
+  renderReader(activeEntry);
+  renderDailySummary(activeEntry);
+}
 
+function renderInputState(): void {
+  const activeEntry = getActiveEntry(state);
+  const canEdit = canEditActiveEntry();
+  newPracticeButton.disabled = !isTodayEntry(activeEntry) || hasEmptyTodayPractice();
+  renderEditorMetrics(activeEntry, activeEntry.draft, canEdit);
+}
+
+function renderEditorMetrics(activeEntry: DailyEntry, activeContent: string, canEdit: boolean): void {
+  const activeStats = getTokenStats(activeContent);
+  const overLimit = activeStats.total_units > 300;
+  const progress = Math.min(activeStats.total_units / 300, 1);
+  document.body.classList.toggle("over-limit", overLimit);
   meter.innerHTML = `
     <div class="meter-label"><strong>${activeStats.total_units}</strong><span>/300</span></div>
     <div class="meter-track"><span style="width: ${progress * 100}%"></span></div>
@@ -831,15 +857,6 @@ function render(): void {
     <button class="button primary save-inline" type="button" ${!canEdit || activeEntry.draft === activeEntry.lastSavedContent ? "disabled" : ""}>保存版本</button>
   `;
   statsRow.querySelector<HTMLButtonElement>(".save-inline")?.addEventListener("click", saveActiveVersion);
-
-  renderHabitStats();
-  renderPracticeTabs(activeEntry);
-  renderCalendarList();
-  renderTimeline(activeEntry);
-  renderReader(activeEntry);
-  renderDailySummary(activeEntry);
-  renderFeed();
-  renderOverview();
 }
 
 function registerServiceWorker(): void {
@@ -884,12 +901,27 @@ async function hydrateActiveStorage(): Promise<void> {
   }
 
   state = ensureTodayEntry(pruneHistoricalEmptyEntries(opfsState));
+  resetDerivedCaches();
   selectedVersionId = getActiveEntry(state).current_version_id;
   detailMode = "writing";
   historyEditUnlockedEntryId = null;
-  persistState(state);
   refreshStorageHealthLight();
   render();
+  scheduleEntrySummaryWarmup();
+}
+
+async function initializeStorageAndPrompts(): Promise<void> {
+  if (shouldShowOpfsUpgradePrompt()) {
+    showStorageUpgradePrompt();
+    return;
+  }
+
+  await hydrateActiveStorage();
+  if (shouldShowChangelogOnLaunch()) {
+    showChangelogDialog();
+  } else {
+    showStorageNoticeIfNeeded();
+  }
 }
 
 function loadThemePreference(): ThemePreference {
@@ -1108,7 +1140,7 @@ function renderPracticeTabs(activeEntry: DailyEntry): void {
     .map((entry, index) => {
       const finalVersion = getFinalVersion(entry);
       const active = entry.entry_id === activeEntry.entry_id ? " active" : "";
-      const savedMark = finalVersion ? `${getTokenStats(finalVersion.content).total_units}/300` : "草稿";
+      const savedMark = finalVersion ? `${finalVersion.token_stats.total_units}/300` : "草稿";
       return `
         <button class="practice-tab${active}" data-entry-id="${entry.entry_id}" type="button">
           <span>${getPracticeLabel(entry, entries, index)}</span>
@@ -1124,7 +1156,7 @@ function renderPracticeTabs(activeEntry: DailyEntry): void {
       selectedVersionId = getActiveEntry(state).current_version_id;
       detailMode = "writing";
       historyEditUnlockedEntryId = null;
-      persistState(state);
+      persistDraftState(state);
       render();
     });
   });
@@ -1235,7 +1267,7 @@ function renderCalendarList(): void {
       detailMode = "writing";
       historyEditUnlockedEntryId = null;
       view = "write";
-      persistState(state);
+      persistDraftState(state);
       render();
     });
   });
@@ -1248,6 +1280,7 @@ function renderTimeline(entry: DailyEntry): void {
     return;
   }
 
+  const checkCrossDayVersions = hasCrossDayVersions(entry);
   timeline.innerHTML = [
     `<button class="version-item ${detailMode === "writing" ? "active" : ""}" data-mode="writing" type="button">
       <span class="version-index">Now</span>
@@ -1255,12 +1288,12 @@ function renderTimeline(entry: DailyEntry): void {
       <span class="version-stats">当前草稿</span>
     </button>`,
     ...entry.versions.map((version, index) => {
-      const versionDiff = getVersionDiff(entry, index);
+      const versionDiff = version.diff_from_previous;
       const inserted = versionDiff.filter((unit) => unit.op === "INSERT").length;
       const deleted = versionDiff.filter((unit) => unit.op === "DELETE").length;
       const active = detailMode === "version" && version.version_id === selectedVersionId ? " active" : "";
-      const stats = getTokenStats(version.content);
-      const crossDayBadge = isCrossDayVersion(entry, version) ? `<span class="version-badge">跨天</span>` : "";
+      const stats = version.token_stats;
+      const crossDayBadge = checkCrossDayVersions && isCrossDayVersion(entry, version) ? `<span class="version-badge">跨天</span>` : "";
       return `
         <button class="version-item${active}" data-version-id="${version.version_id}" type="button">
           <span class="version-index">V${index + 1}</span>
@@ -1292,8 +1325,7 @@ function renderReader(entry: DailyEntry): void {
     return;
   }
 
-  const selectedIndex = entry.versions.findIndex((version) => version.version_id === selected.version_id);
-  const visibleUnits = getVersionDiff(entry, selectedIndex).filter((unit) => unit.op !== "DELETE");
+  const visibleUnits = selected.diff_from_previous.filter((unit) => unit.op !== "DELETE");
   reader.innerHTML = `
     <div class="reader-meta">
       <span>${selected.is_initial ? "初始版本" : "相邻版本 Diff"}</span>
@@ -1312,7 +1344,7 @@ function renderDailySummary(entry: DailyEntry): void {
     return;
   }
 
-  const summary = summarizeDiff(first.content, last.content);
+  const summary = getEntrySummary(entry);
   diffSummary.innerHTML = renderSummaryChips(summary, entry.versions.length);
 }
 
@@ -1326,7 +1358,8 @@ function renderFeed(): void {
     return;
   }
 
-  feedList.innerHTML = writtenEntries
+  const visibleEntries = writtenEntries.slice(0, feedVisibleCount);
+  feedList.innerHTML = visibleEntries
     .map((entry) => {
       const last = getFinalVersion(entry);
       if (!last) {
@@ -1334,7 +1367,7 @@ function renderFeed(): void {
       }
       const sameDayEntries = getEntriesForDate(entry.date_key);
       const label = getPracticeLabel(entry, sameDayEntries);
-      const crossDayBadge = isCrossDayVersion(entry, last) ? `<span class="feed-badge">跨天版本</span>` : "";
+      const crossDayBadge = hasCrossDayVersions(entry) && isCrossDayVersion(entry, last) ? `<span class="feed-badge">跨天版本</span>` : "";
       return `
         <article class="feed-card">
           <header>
@@ -1350,6 +1383,12 @@ function renderFeed(): void {
       `;
     })
     .join("");
+  if (visibleEntries.length < writtenEntries.length) {
+    feedList.insertAdjacentHTML(
+      "beforeend",
+      `<button class="button ghost feed-load-more" type="button">继续加载（${visibleEntries.length}/${writtenEntries.length}）</button>`
+    );
+  }
 
   feedList.querySelectorAll<HTMLButtonElement>(".feed-date").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1358,7 +1397,7 @@ function renderFeed(): void {
       detailMode = "writing";
       historyEditUnlockedEntryId = null;
       view = "write";
-      persistState(state);
+      persistDraftState(state);
       render();
     });
   });
@@ -1370,6 +1409,10 @@ function renderFeed(): void {
         void exportDailyCard(entry);
       }
     });
+  });
+  feedList.querySelector<HTMLButtonElement>(".feed-load-more")?.addEventListener("click", () => {
+    feedVisibleCount += feedPageSize;
+    renderFeed();
   });
 }
 
@@ -1536,23 +1579,28 @@ async function exportOverviewCard(): Promise<void> {
   ctx.fillStyle = palette.text;
   ctx.font = cardFont(26);
   ctx.fillText("年度格", contentX, 410);
-  ctx.fillStyle = palette.muted;
   ctx.font = cardFont(20);
-  ctx.fillText(`${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 +${insertedTotal} -${deletedTotal}`, contentX + 104, 410);
+  let gridMetaX = contentX + 104;
+  const gridMetaPrefix = `${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 `;
+  ctx.fillStyle = palette.muted;
+  ctx.fillText(gridMetaPrefix, gridMetaX, 410);
+  gridMetaX += ctx.measureText(gridMetaPrefix).width;
+  const insertedMeta = `+${insertedTotal}`;
+  ctx.fillStyle = palette.success;
+  ctx.fillText(insertedMeta, gridMetaX, 410);
+  gridMetaX += ctx.measureText(insertedMeta).width;
+  ctx.fillStyle = palette.danger;
+  ctx.fillText(` -${deletedTotal}`, gridMetaX, 410);
   drawOverviewCardGrid(ctx, days, intensityMax, contentX, 438, palette);
 
   ctx.fillStyle = palette.text;
   ctx.font = cardFont(26);
   ctx.fillText("每日数据", contentX, 636);
-  ctx.fillStyle = palette.muted;
-  ctx.font = cardFont(20);
-  ctx.fillText("按已推进日期展示，不含正文", contentX + 122, 636);
   drawOverviewCardTrack(ctx, "日总字数", elapsedDays, wordMax, (day) => day.wordCount, contentX, 680, palette);
   drawOverviewCardTrack(ctx, "日版本", elapsedDays, versionMax, (day) => day.versions, contentX, 762, palette);
   drawOverviewCardTrack(ctx, "日修改量", elapsedDays, intensityMax, (day) => day.churn, contentX, 844, palette);
 
   const pillLabelY = pillY + 31;
-  drawSoftPill(ctx, contentX, pillY, 520, pillHeight, palette);
   ctx.fillStyle = palette.text;
   ctx.font = cardFont(22);
   ctx.fillText("修改量最高", contentX + 24, pillLabelY);
@@ -1677,6 +1725,7 @@ async function importBackup(file: File): Promise<void> {
     }
 
     state = ensureTodayEntry(importedState);
+    resetDerivedCaches();
     persistState(state);
     if (parsedPreferences.preferences?.theme) {
       themePreference = parseThemePreference(parsedPreferences.preferences.theme);
@@ -1688,11 +1737,13 @@ async function importBackup(file: File): Promise<void> {
     detailMode = "writing";
     historyEditUnlockedEntryId = null;
     view = "write";
+    feedVisibleCount = feedPageSize;
     importConfirm.classList.add("hidden");
     importConfirmButton.disabled = false;
     refreshStorageUpgradeEntry();
     refreshStorageHealthLight();
     render();
+    scheduleEntrySummaryWarmup();
   } catch {
     showImportStatus("导入失败，请确认备份文件来自逐字。", "error");
     importConfirmButton.disabled = false;
@@ -1716,13 +1767,13 @@ function renderEntryMarkdown(entry: DailyEntry): string {
     return "";
   }
 
-  const summary = summarizeDiff(first.content, last.content);
+  const summary = getEntrySummary(entry);
   const sameDayEntries = getEntriesForDate(entry.date_key);
   const label = getPracticeLabel(entry, sameDayEntries);
   const lines = [
     `## ${entry.date_key} · ${label}`,
     "",
-    `${getTokenStats(last.content).total_units}/300`,
+    `${last.token_stats.total_units}/300`,
     "",
     last.content || "空白版本",
     "",
@@ -1732,9 +1783,10 @@ function renderEntryMarkdown(entry: DailyEntry): string {
     ""
   ];
 
+  const checkCrossDayVersions = hasCrossDayVersions(entry);
   entry.versions.forEach((version, index) => {
-    const crossDay = isCrossDayVersion(entry, version) ? " · 跨天版本" : "";
-    lines.push(`- V${index + 1} · ${formatDateTime(version.created_at)} · ${getTokenStats(version.content).total_units}/300${crossDay}`);
+    const crossDay = checkCrossDayVersions && isCrossDayVersion(entry, version) ? " · 跨天版本" : "";
+    lines.push(`- V${index + 1} · ${formatDateTime(version.created_at)} · ${version.token_stats.total_units}/300${crossDay}`);
   });
 
   lines.push("");
@@ -1748,7 +1800,74 @@ function renderEntrySummaryChips(entry: DailyEntry): string {
     return "";
   }
 
-  return renderSummaryChips(summarizeDiff(first.content, last.content), entry.versions.length);
+  return renderSummaryChips(getEntrySummary(entry), entry.versions.length);
+}
+
+function getEntrySummary(entry: DailyEntry): ReturnType<typeof summarizeDiff> {
+  const first = entry.versions[0];
+  const last = entry.versions.at(-1);
+  if (!first || !last) {
+    return summarizeDiff("", "");
+  }
+
+  const signature = `${first.version_id}:${last.version_id}:${entry.versions.length}`;
+  const cached = entrySummaryCache.get(entry.entry_id);
+  if (cached?.signature === signature) {
+    return cached.summary;
+  }
+
+  const summary = summarizeDiff(first.content, last.content);
+  entrySummaryCache.set(entry.entry_id, { signature, summary });
+  return summary;
+}
+
+function scheduleEntrySummaryWarmup(): void {
+  const generation = ++summaryWarmupGeneration;
+  const entries = getWrittenEntries();
+  let index = 0;
+
+  const runBatch = (deadline?: IdleDeadline): void => {
+    if (generation !== summaryWarmupGeneration) {
+      return;
+    }
+
+    let processed = 0;
+    while (index < entries.length && (processed === 0 || !deadline || deadline.timeRemaining() > 4)) {
+      getEntrySummary(entries[index]);
+      index += 1;
+      processed += 1;
+      if (!deadline && processed >= 2) {
+        break;
+      }
+    }
+
+    if (index < entries.length) {
+      scheduleNextBatch();
+    }
+  };
+
+  const scheduleNextBatch = (): void => {
+    if ("requestIdleCallback" in window) {
+      window.requestIdleCallback(runBatch, { timeout: 250 });
+    } else {
+      setTimeout(() => runBatch(), 0);
+    }
+  };
+
+  scheduleNextBatch();
+}
+
+function hasCrossDayVersions(entry: DailyEntry): boolean {
+  const lastVersionId = entry.versions.at(-1)?.version_id ?? "empty";
+  const signature = `${lastVersionId}:${entry.versions.length}`;
+  const cached = crossDayCache.get(entry.entry_id);
+  if (cached?.signature === signature) {
+    return cached.hasCrossDayVersion;
+  }
+
+  const hasCrossDayVersion = entry.versions.some((version) => isCrossDayVersion(entry, version));
+  crossDayCache.set(entry.entry_id, { signature, hasCrossDayVersion });
+  return hasCrossDayVersion;
 }
 
 function renderSummaryChips(summary: ReturnType<typeof summarizeDiff>, iterations: number): string {
@@ -1785,9 +1904,24 @@ function getWrittenEntries(): DailyEntry[] {
 }
 
 function getEntriesForDate(key: string): DailyEntry[] {
-  return state.entries
-    .filter((entry) => entry.date_key === key)
-    .sort((left, right) => right.created_at.localeCompare(left.created_at));
+  ensureEntryDateIndex();
+  return entriesByDate.get(key) ?? [];
+}
+
+function ensureEntryDateIndex(): void {
+  if (indexedEntriesReference === state.entries) {
+    return;
+  }
+
+  const nextIndex = new Map<string, DailyEntry[]>();
+  for (const entry of state.entries) {
+    const entries = nextIndex.get(entry.date_key) ?? [];
+    entries.push(entry);
+    nextIndex.set(entry.date_key, entries);
+  }
+  nextIndex.forEach((entries) => entries.sort((left, right) => right.created_at.localeCompare(left.created_at)));
+  indexedEntriesReference = state.entries;
+  entriesByDate = nextIndex;
 }
 
 function getPracticeLabel(entry: DailyEntry, entries = getEntriesForDate(entry.date_key), fallbackIndex?: number): string {
@@ -1893,9 +2027,9 @@ function getOverviewDayMetrics(key: string): OverviewDay {
       continue;
     }
 
-    const summary = summarizeDiff(first.content, last.content);
-    const firstStats = getTokenStats(first.content);
-    const finalStats = getTokenStats(last.content);
+    const summary = getEntrySummary(entry);
+    const firstStats = first.token_stats;
+    const finalStats = last.token_stats;
     wordCount += finalStats.total_units;
     versions += entry.versions.length;
     inserted += textInsertCount(summary) + summary.punctuation.insert;
@@ -2017,16 +2151,6 @@ function isCrossDayVersion(entry: DailyEntry, version: Version): boolean {
   return toLocalDateKey(new Date(version.created_at)) !== entry.date_key;
 }
 
-function getVersionDiff(entry: DailyEntry, versionIndex: number): DiffUnit[] {
-  const version = entry.versions[versionIndex];
-  if (!version) {
-    return [];
-  }
-
-  const previous = entry.versions[versionIndex - 1];
-  return diffTexts(previous?.content ?? "", version.content);
-}
-
 async function exportDailyCard(entry: DailyEntry): Promise<void> {
   const first = entry.versions[0];
   const last = entry.versions.at(-1);
@@ -2035,7 +2159,7 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   }
 
   await document.fonts.ready;
-  const summary = summarizeDiff(first.content, last.content);
+  const summary = getEntrySummary(entry);
   const palette = getSharePalette();
   const canvas = document.createElement("canvas");
   const scale = 2;
@@ -2046,7 +2170,7 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   const cardW = cardWidth - cardX * 2;
   const contentStartY = 230;
   const lineHeight = 48;
-  const lastStats = getTokenStats(last.content);
+  const lastStats = last.token_stats;
   const meterText = `${lastStats.total_units} / 300`;
   const achievementText = renderShareAchievementText();
   const measureCanvas = document.createElement("canvas");
@@ -2305,10 +2429,9 @@ function drawOverviewCardTrack(
   palette = getSharePalette()
 ): void {
   const labelW = 118;
-  const trackW = 1040;
-  const barGap = 2;
+  const trackW = overviewExportTrackWidth;
   const count = Math.max(days.length, 1);
-  const barW = Math.max(5, Math.min(14, (trackW - (count - 1) * barGap) / count));
+  const { barGap, barWidth: barW } = getOverviewExportBarLayout(count);
   ctx.fillStyle = palette.muted;
   ctx.font = cardFont(20);
   ctx.fillText(label, x, y + 38);

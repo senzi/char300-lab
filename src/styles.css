@@ -444,11 +444,14 @@ h3 {
 .storage-health-light {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 7px;
+  width: 118px;
   border: 0;
   padding: 0;
   color: inherit;
   background: transparent;
+  white-space: nowrap;
 }
 
 .storage-health-light > span {
@@ -461,12 +464,6 @@ h3 {
 
 .storage-health-light strong {
   font-weight: 400;
-}
-
-.storage-health-light:focus-visible {
-  outline: 2px solid var(--strong-border);
-  outline-offset: 3px;
-  border-radius: 3px;
 }
 
 .storage-health-light-green {
@@ -677,6 +674,11 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.feed-load-more {
+  align-self: center;
+  margin: 8px auto 0;
 }
 
 .timeline {
@@ -1185,14 +1187,12 @@ body.theme-dark .year-cell.written.level-3 {
 }
 
 .overview-track div {
-  display: grid;
-  grid-template-columns: repeat(var(--day-count), minmax(10px, 16px));
+  display: flex;
   align-items: end;
-  justify-content: start;
   gap: 1px;
   min-height: 42px;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
+  overflow: hidden;
   scrollbar-width: none;
 }
 
@@ -1202,6 +1202,9 @@ body.theme-dark .year-cell.written.level-3 {
 
 .overview-track i {
   display: block;
+  flex: 1 1 0;
+  width: 100%;
+  max-width: 16px;
   min-width: 1px;
   border-radius: 2px 2px 0 0;
   background: var(--text);

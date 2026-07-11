@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { beforeEach } from "node:test";
-import { getStorageStatus, hasMeaningfulArticleData, loadState, normalizeState, parseImportedState, persistState, shouldShowOpfsUpgradePrompt } from "../src/store.ts";
+import { getStorageStatus, hasMeaningfulArticleData, loadState, normalizeState, parseImportedState, persistDraftState, persistState, pruneHistoricalEmptyEntries, shouldShowOpfsUpgradePrompt, updateDraft } from "../src/store.ts";
 import { makeEntry, makeLegacyState, makeState, makeVersion } from "./fixtures.ts";
 
 class MemoryStorage implements Storage {
@@ -76,6 +76,24 @@ test("normalize preserves all stored article and version identity fields", () =>
   assert.equal(normalized.entries[0].versions[0].content, version.content);
   assert.equal(normalized.entries[0].versions[0].created_at, version.created_at);
   assert.equal(normalized.entries[0].versions[0].is_initial, true);
+});
+
+test("normalize reuses persisted token statistics and diff caches when present", () => {
+  const version = makeVersion("entry-derived", 1, "正文已经变化");
+  version.token_stats = {
+    text_units: 123,
+    punctuation_units: 4,
+    total_units: 127,
+    han_units: 120,
+    latin_units: 2,
+    number_units: 1
+  };
+  version.diff_from_previous = [{ op: "INSERT", token: { value: "cache", kind: "latin" } }];
+
+  const normalized = normalizeState(makeState([makeEntry({ entry_id: "entry-derived", versions: [version] })]));
+
+  assert.deepEqual(normalized.entries[0].versions[0].token_stats, version.token_stats);
+  assert.deepEqual(normalized.entries[0].versions[0].diff_from_previous, version.diff_from_previous);
 });
 
 test("wrapped v2 JSON remains importable without changing content", () => {
@@ -165,6 +183,88 @@ test("OPFS-unsupported browsers keep empty state in localStorage without showing
   assert.equal(localStorage.getItem("char300-lab-opfs-upgrade-v1"), null);
   assert.equal(shouldShowOpfsUpgradePrompt(), false);
 });
+
+test("OPFS draft input writes a small journal instead of rewriting the full localStorage snapshot", () => {
+  enableOpfsSupport();
+  const state = loadState();
+  const drafted = updateDraft(state, "尚未保存的草稿");
+
+  persistDraftState(drafted);
+
+  assert.equal(localStorage.getItem("char300-lab-state-v2"), null);
+  const journal = JSON.parse(localStorage.getItem("char300-lab-draft-journal-v1") ?? "null") as { entries?: Record<string, { draft?: string }> } | null;
+  assert.equal(journal?.entries?.[drafted.active_entry_id]?.draft, "尚未保存的草稿");
+});
+
+test("OPFS draft journal preserves unsaved drafts from multiple entries", () => {
+  enableOpfsSupport();
+  const first = makeEntry({ entry_id: "draft-a", updated_at: "2026-07-11T01:00:00.000Z", draft: "A 草稿" });
+  const second = makeEntry({ entry_id: "draft-b", updated_at: "2026-07-11T02:00:00.000Z", draft: "B 草稿" });
+  loadState();
+
+  persistDraftState({ entries: [first, second], active_entry_id: first.entry_id });
+  persistDraftState({ entries: [first, second], active_entry_id: second.entry_id });
+
+  const journal = JSON.parse(localStorage.getItem("char300-lab-draft-journal-v1") ?? "null") as DraftJournalFixture;
+  assert.equal(journal.entries[first.entry_id].draft, "A 草稿");
+  assert.equal(journal.entries[second.entry_id].draft, "B 草稿");
+});
+
+test("a newer draft journal is recovered over an older compatibility snapshot", () => {
+  const original = makeState();
+  original.entries[0].updated_at = "2026-07-11T01:00:00.000Z";
+  original.entries[0].draft = "旧草稿";
+  localStorage.setItem("char300-lab-state-v2", JSON.stringify(original));
+  localStorage.setItem("char300-lab-opfs-upgrade-v1", "upgraded");
+  localStorage.setItem(
+    "char300-lab-draft-journal-v1",
+    JSON.stringify({ entry_id: original.entries[0].entry_id, draft: "恢复的新草稿", updated_at: "2026-07-11T02:00:00.000Z" })
+  );
+
+  const recovered = loadState();
+
+  assert.equal(recovered.entries[0].draft, "恢复的新草稿");
+  assert.equal(recovered.entries[0].updated_at, "2026-07-11T02:00:00.000Z");
+});
+
+test("the multi-entry draft journal recovers every newer unsaved draft", () => {
+  const first = makeEntry({ entry_id: "recover-a", updated_at: "2026-07-11T01:00:00.000Z", draft: "旧 A" });
+  const second = makeEntry({ entry_id: "recover-b", updated_at: "2026-07-11T01:00:00.000Z", draft: "旧 B" });
+  localStorage.setItem("char300-lab-state-v2", JSON.stringify({ entries: [first, second], active_entry_id: first.entry_id }));
+  localStorage.setItem("char300-lab-opfs-upgrade-v1", "upgraded");
+  localStorage.setItem(
+    "char300-lab-draft-journal-v1",
+    JSON.stringify({
+      entries: {
+        [first.entry_id]: { draft: "新 A", updated_at: "2026-07-11T02:00:00.000Z" },
+        [second.entry_id]: { draft: "新 B", updated_at: "2026-07-11T03:00:00.000Z" }
+      }
+    })
+  );
+
+  const recovered = loadState();
+  assert.equal(recovered.entries.find((entry) => entry.entry_id === first.entry_id)?.draft, "新 A");
+  assert.equal(recovered.entries.find((entry) => entry.entry_id === second.entry_id)?.draft, "新 B");
+});
+
+test("historical cleanup never removes an entry containing user data", () => {
+  const dated = "2026-01-01";
+  const draft = makeEntry({ entry_id: "historical-draft", date_key: dated, versions: [], current_version_id: null, draft: "未保存正文", lastSavedContent: "" });
+  const saved = makeEntry({ entry_id: "historical-saved", date_key: dated, draft: "", lastSavedContent: "已保存正文" });
+  const versioned = makeEntry({ entry_id: "historical-version", date_key: dated, draft: "", lastSavedContent: "" });
+
+  const cleaned = pruneHistoricalEmptyEntries(makeState([draft, saved, versioned]));
+  assert.deepEqual(new Set(cleaned.entries.map((entry) => entry.entry_id)), new Set([draft.entry_id, saved.entry_id, versioned.entry_id]));
+});
+
+test("normalize preserves a user-defined entry title", () => {
+  const state = makeState([makeEntry({ optional_title: "我的标题" })]);
+  assert.equal(normalizeState(state).entries[0].optional_title, "我的标题");
+});
+
+type DraftJournalFixture = {
+  entries: Record<string, { draft: string; updated_at: string }>;
+};
 
 test("storage status reports localStorage fallback when the compatibility snapshot succeeds", () => {
   persistState(makeState());
