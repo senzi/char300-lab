@@ -1,5 +1,5 @@
 import type { DiffSummary, DiffUnit, TextToken } from "./types";
-import { tokenize } from "./tokenizer";
+import { tokenize } from "./tokenizer.ts";
 
 export function diffTexts(previous: string, current: string): DiffUnit[] {
   return diffTokens(tokenize(previous), tokenize(current));

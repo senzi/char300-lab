@@ -1,6 +1,6 @@
 import type { AppState, DailyEntry, Version } from "./types";
-import { diffTexts } from "./diff";
-import { getTokenStats } from "./tokenizer";
+import { diffTexts } from "./diff.ts";
+import { getTokenStats } from "./tokenizer.ts";
 
 const storageKey = "char300-lab-state-v2";
 const legacyStorageKey = "char300-lab-state-v1";
@@ -19,9 +19,18 @@ type LegacySingleEntryState = {
 
 type OpfsUpgradeState = "upgraded" | "failed";
 
+export type StorageStatusKind = "opfs-saved" | "opfs-saving" | "local-fallback" | "save-error";
+
+export type StorageStatus = {
+  kind: StorageStatusKind;
+  lastSavedAt: string | null;
+};
+
 let hadLegacyArticleDataAtStartup = false;
 let opfsWriteEnabled = false;
 let opfsStorageHealthy = false;
+let storageStatus: StorageStatus = { kind: "local-fallback", lastSavedAt: null };
+const storageStatusListeners = new Set<() => void>();
 
 export function todayKey(): string {
   return dateKey(new Date());
@@ -68,14 +77,12 @@ export function createEmptyState(): AppState {
 }
 
 export function loadState(): AppState {
+  hadLegacyArticleDataAtStartup = false;
   const raw = localStorage.getItem(storageKey);
   if (raw) {
-    const alreadyUpgraded = localStorage.getItem(opfsUpgradeKey) === "upgraded";
-    hadLegacyArticleDataAtStartup = !alreadyUpgraded;
-    opfsWriteEnabled = false;
-    opfsStorageHealthy = false;
     try {
       const normalized = normalizeState(JSON.parse(raw) as AppState);
+      configureStorageForLoadedState(normalized);
       persistState(normalized);
       return normalized;
     } catch {
@@ -93,12 +100,9 @@ export function loadState(): AppState {
     return createEmptyState();
   }
 
-  const alreadyUpgraded = localStorage.getItem(opfsUpgradeKey) === "upgraded";
-  hadLegacyArticleDataAtStartup = !alreadyUpgraded;
-  opfsWriteEnabled = false;
-  opfsStorageHealthy = false;
   try {
     const migrated = normalizeLegacySingleEntryState(JSON.parse(legacyRaw) as LegacySingleEntryState);
+    configureStorageForLoadedState(migrated);
     persistState(migrated);
     return migrated;
   } catch {
@@ -106,17 +110,52 @@ export function loadState(): AppState {
   }
 }
 
+export function hasMeaningfulArticleData(state: AppState): boolean {
+  return state.entries.some(
+    (entry) => entry.versions.length > 0 || entry.draft.length > 0 || entry.lastSavedContent.length > 0
+  );
+}
+
 export function persistState(state: AppState): void {
-  localStorage.setItem(storageKey, JSON.stringify(state));
+  let localStorageSaved = false;
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(state));
+    localStorageSaved = true;
+  } catch {
+    localStorageSaved = false;
+  }
+
   if (opfsWriteEnabled) {
+    setStorageStatus({ kind: "opfs-saving", lastSavedAt: storageStatus.lastSavedAt });
     void writeOpfsState(state)
       .then(() => {
         opfsStorageHealthy = true;
+        setStorageStatus({ kind: "opfs-saved", lastSavedAt: new Date().toISOString() });
       })
       .catch(() => {
         opfsStorageHealthy = false;
+        setStorageStatus({
+          kind: localStorageSaved ? "local-fallback" : "save-error",
+          lastSavedAt: localStorageSaved ? new Date().toISOString() : storageStatus.lastSavedAt
+        });
       });
+    return;
   }
+
+  setStorageStatus({
+    kind: localStorageSaved ? "local-fallback" : "save-error",
+    lastSavedAt: localStorageSaved ? new Date().toISOString() : storageStatus.lastSavedAt
+  });
+}
+
+export function getStorageStatus(): StorageStatus {
+  return { ...storageStatus };
+}
+
+export function subscribeStorageStatus(listener: () => void): () => void {
+  storageStatusListeners.add(listener);
+  listener();
+  return () => storageStatusListeners.delete(listener);
 }
 
 export function ensureTodayEntry(state: AppState): AppState {
@@ -219,14 +258,20 @@ export async function hydrateOpfsStorage(currentState: AppState): Promise<AppSta
     opfsStorageHealthy = true;
     if (!stored) {
       await writeOpfsState(currentState);
+      setStorageStatus({ kind: "opfs-saved", lastSavedAt: new Date().toISOString() });
       return null;
     }
 
     localStorage.setItem(storageKey, JSON.stringify(stored));
+    setStorageStatus({ kind: "opfs-saved", lastSavedAt: new Date().toISOString() });
     return stored;
   } catch {
     opfsWriteEnabled = false;
     opfsStorageHealthy = false;
+    setStorageStatus({
+      kind: localStorage.getItem(storageKey) ? "local-fallback" : "save-error",
+      lastSavedAt: storageStatus.lastSavedAt
+    });
     return null;
   }
 }
@@ -352,6 +397,20 @@ function isOpfsSupported(): boolean {
   return typeof navigator !== "undefined" && typeof navigator.storage?.getDirectory === "function";
 }
 
+function configureStorageForLoadedState(state: AppState): void {
+  const alreadyUpgraded = localStorage.getItem(opfsUpgradeKey) === "upgraded";
+  const shouldMigrateLegacyData = !alreadyUpgraded && hasMeaningfulArticleData(state);
+  const canStartFreshOnOpfs = !alreadyUpgraded && !shouldMigrateLegacyData && isOpfsSupported();
+
+  hadLegacyArticleDataAtStartup = shouldMigrateLegacyData;
+  opfsWriteEnabled = canStartFreshOnOpfs;
+  opfsStorageHealthy = canStartFreshOnOpfs;
+
+  if (canStartFreshOnOpfs) {
+    localStorage.setItem(opfsUpgradeKey, "upgraded" satisfies OpfsUpgradeState);
+  }
+}
+
 async function getOpfsDirectory(): Promise<FileSystemDirectoryHandle> {
   const root = await navigator.storage.getDirectory();
   return root.getDirectoryHandle(opfsDirectoryName, { create: true });
@@ -391,6 +450,15 @@ async function writeTextFile(dir: FileSystemDirectoryHandle, name: string, conte
 
 function statesAreEquivalent(left: AppState, right: AppState): boolean {
   return JSON.stringify(normalizeState(left)) === JSON.stringify(normalizeState(right));
+}
+
+function setStorageStatus(nextStatus: StorageStatus): void {
+  if (storageStatus.kind === nextStatus.kind && storageStatus.lastSavedAt === nextStatus.lastSavedAt) {
+    return;
+  }
+
+  storageStatus = nextStatus;
+  storageStatusListeners.forEach((listener) => listener());
 }
 
 function normalizeEntry(entry: DailyEntry): DailyEntry {

@@ -21,6 +21,7 @@ target
 #.idea/
 
 docs/
+test/
 
 node_modules
 dist

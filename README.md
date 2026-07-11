@@ -15,7 +15,7 @@
 
 ## 当前版本
 
-0.2.4 新增 JSON 导出、JSON 架构说明与 ZIP/JSON 兼容导入；旧版 ZIP 备份仍可继续恢复。
+0.2.6 建立数据兼容测试、性能基线与统一版本检查，并增强本地存储状态反馈；旧版 ZIP/JSON 备份仍可继续恢复。
 
 ## 运行
 
@@ -104,4 +104,7 @@ const json = await page.evaluate(() => window.zhuzi.exportJson());
 npm run dev      # 启动开发服务器
 npm run build    # 构建静态网页
 npm run preview  # 预览构建结果
+npm test         # 运行数据兼容与统计规则测试
+npm run benchmark # 生成合成长档案性能基线
+npm run check    # 运行版本、测试、类型与生产构建检查
 ```

@@ -2,10 +2,11 @@ import "./styles.css";
 import JSZip from "jszip";
 import logoDarkUrl from "./assets/logo-dark.svg";
 import logoUrl from "./assets/logo.svg";
+import { generateCompressedZip, readBackupPayload } from "./backup";
 import { diffTexts, summarizeDiff } from "./diff";
 import { getTokenStats } from "./tokenizer";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
-import { canOfferOpfsUpgrade, createTodayPractice, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistState, pruneHistoricalEmptyEntries, saveVersion, shouldShowOpfsUpgradePrompt, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
+import { canOfferOpfsUpgrade, createTodayPractice, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, getStorageStatus, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistState, pruneHistoricalEmptyEntries, saveVersion, shouldShowOpfsUpgradePrompt, subscribeStorageStatus, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
@@ -16,6 +17,15 @@ const themePreferenceKey = "zhuzi-theme-preference-v1";
 const writingYearGoalDays = 365;
 const writingMilestones = [3, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 120, 150, 180, 210, 240, 270, 300, 330, 365];
 const changelog: ChangelogEntry[] = [
+  {
+    version: "0.2.6",
+    date: "2026-07-11",
+    title: "安全迭代基线",
+    items: [
+      "建立数据兼容测试、合成档案性能基线和基础持续集成检查。",
+      "统一应用与离线缓存版本，并增强本地存储状态反馈。"
+    ]
+  },
   {
     version: "0.2.5",
     date: "2026-07-09",
@@ -422,6 +432,11 @@ app.innerHTML = `
       <span>Vibecoding</span>
       <span aria-hidden="true">|</span>
       <a href="https://weibo.com/1401527553/R71bIwAVs" target="_blank" rel="noreferrer">灵感来源</a>
+      <span aria-hidden="true">|</span>
+      <button class="storage-health-light storage-health-light-red" id="storageHealthLight" type="button" aria-label="localStorage 保底" title="localStorage 保底">
+        <span aria-hidden="true"></span>
+        <strong id="storageHealthText">localStorage 保底</strong>
+      </button>
     </footer>
   </main>
   <div class="notice-backdrop hidden" id="importConfirm" role="dialog" aria-modal="true" aria-labelledby="importConfirmTitle">
@@ -475,7 +490,6 @@ app.innerHTML = `
       </div>
     </section>
   </div>
-  <button class="storage-health-light storage-health-light-red" id="storageHealthLight" type="button" aria-label="OPFS 未启用" title="OPFS 未启用"></button>
 `;
 
 const dateTitle = getElement<HTMLElement>("dateTitle");
@@ -545,6 +559,7 @@ const storageDialogDontShow = getElement<HTMLInputElement>("storageDialogDontSho
 const storageDialogSecondaryButton = getElement<HTMLButtonElement>("storageDialogSecondaryButton");
 const storageDialogPrimaryButton = getElement<HTMLButtonElement>("storageDialogPrimaryButton");
 const storageHealthLight = getElement<HTMLButtonElement>("storageHealthLight");
+const storageHealthText = getElement<HTMLElement>("storageHealthText");
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let themePreference = loadThemePreference();
 let storageDialogMode: StorageDialogMode = "notice";
@@ -552,6 +567,7 @@ let storageDialogMode: StorageDialogMode = "notice";
 jsonSchemaContent.textContent = getJsonSchemaDescription();
 installAutomationApi();
 applyThemePreference();
+subscribeStorageStatus(refreshStorageHealthLight);
 
 editor.addEventListener("input", () => {
   if (!canEditActiveEntry()) {
@@ -1015,12 +1031,22 @@ function refreshStorageUpgradeEntry(): void {
 }
 
 function refreshStorageHealthLight(): void {
-  const active = isOpfsStorageActive();
-  const label = active ? "OPFS 已启用" : "OPFS 未启用";
-  storageHealthLight.classList.toggle("storage-health-light-green", active);
-  storageHealthLight.classList.toggle("storage-health-light-red", !active);
+  const status = getStorageStatus();
+  const label =
+    status.kind === "opfs-saved"
+      ? "OPFS 已保存"
+      : status.kind === "opfs-saving"
+        ? "OPFS 正在保存"
+        : status.kind === "save-error"
+          ? "保存失败"
+          : "localStorage 保底";
+  const healthy = status.kind === "opfs-saved";
+  storageHealthLight.classList.toggle("storage-health-light-green", healthy);
+  storageHealthLight.classList.toggle("storage-health-light-red", status.kind === "local-fallback" || status.kind === "save-error");
+  storageHealthLight.classList.toggle("storage-health-light-saving", status.kind === "opfs-saving");
   storageHealthLight.setAttribute("aria-label", label);
-  storageHealthLight.title = canOfferOpfsUpgrade() && !active ? `${label}，点击升级` : label;
+  storageHealthLight.title = canOfferOpfsUpgrade() && status.kind === "local-fallback" ? `${label}，点击升级` : label;
+  storageHealthText.textContent = label;
 }
 
 function showImportConfirm(): void {
@@ -1611,7 +1637,7 @@ async function exportZipBackup(): Promise<void> {
     zip.file(`markdown/days/${entry.date_key}-${slugifyPracticeLabel(entry)}.md`, renderEntryMarkdown(entry));
   }
 
-  const blob = await zip.generateAsync({ type: "blob" });
+  const blob = await generateCompressedZip(zip);
   downloadBlob(blob, `逐字-备份-${todayKey()}.zip`);
 }
 
@@ -1671,24 +1697,6 @@ async function importBackup(file: File): Promise<void> {
     showImportStatus("导入失败，请确认备份文件来自逐字。", "error");
     importConfirmButton.disabled = false;
   }
-}
-
-async function readBackupPayload(file: File): Promise<{ preferences?: { theme?: string } } | unknown> {
-  if (isZipBackupFile(file)) {
-    const zip = await JSZip.loadAsync(file);
-    const dataFile = zip.file("zhuzi-data.json") ?? zip.file("char300-lab-data.json");
-    if (!dataFile) {
-      throw new Error("Backup JSON missing from zip");
-    }
-
-    return JSON.parse(await dataFile.async("string")) as unknown;
-  }
-
-  return JSON.parse(await file.text()) as unknown;
-}
-
-function isZipBackupFile(file: File): boolean {
-  return file.name.toLowerCase().endsWith(".zip") || file.type === "application/zip" || file.type === "application/x-zip-compressed";
 }
 
 function showImportStatus(message: string, tone: "error" | "info"): void {

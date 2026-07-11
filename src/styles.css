@@ -253,6 +253,7 @@ h3 {
 .date-title {
   justify-self: center;
   text-align: center;
+  transform: translateY(23px);
   white-space: nowrap;
 }
 
@@ -441,32 +442,51 @@ h3 {
 }
 
 .storage-health-light {
-  position: fixed;
-  right: 14px;
-  bottom: 14px;
-  z-index: 15;
-  width: 13px;
-  height: 13px;
-  border: 1px solid var(--border);
-  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
   padding: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.storage-health-light > span {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
   background: var(--danger);
-  box-shadow: 0 0 0 3px var(--bg), 0 1px 4px rgba(0, 0, 0, 0.16);
+}
+
+.storage-health-light strong {
+  font-weight: 400;
 }
 
 .storage-health-light:focus-visible {
   outline: 2px solid var(--strong-border);
   outline-offset: 3px;
+  border-radius: 3px;
 }
 
 .storage-health-light-green {
-  border-color: rgba(40, 122, 70, 0.36);
-  background: var(--success);
+  color: var(--footer-text);
 }
 
 .storage-health-light-red {
-  border-color: var(--danger-border-strong);
+  color: var(--danger);
+}
+
+.storage-health-light-green > span {
+  background: var(--success);
+}
+
+.storage-health-light-red > span {
   background: var(--danger);
+}
+
+.storage-health-light-saving > span {
+  background: var(--muted);
 }
 
 .workspace {
@@ -1389,6 +1409,7 @@ body.theme-dark .year-cell.written.level-3 {
   .date-title {
     justify-self: auto;
     text-align: left;
+    transform: none;
     white-space: normal;
   }
 
