@@ -1,4 +1,4 @@
-const APP_VERSION = "0.3.0";
+const APP_VERSION = "0.3.1";
 const APP_CACHE = `zhuzi-app-${APP_VERSION}`;
 const RUNTIME_CACHE = `zhuzi-runtime-${APP_VERSION}`;
 const FONT_CACHE = `zhuzi-fonts-${APP_VERSION}`;

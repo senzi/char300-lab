@@ -882,8 +882,6 @@ h3 {
   gap: 6px;
   overflow: auto;
   cursor: grab;
-  mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent);
   scrollbar-width: none;
   user-select: none;
   touch-action: pan-x;
@@ -1073,10 +1071,7 @@ mark {
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px;
-  background: var(--panel-bg);
+  padding: 18px 0;
   overflow: auto;
   scrollbar-width: none;
 }
@@ -1117,7 +1112,7 @@ mark {
 .overview-summary div {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px;
+  padding: 12px;
   background: var(--subtle-faint);
 }
 
@@ -1155,6 +1150,28 @@ mark {
   grid-auto-columns: 12px;
   gap: 4px;
   overflow: hidden;
+}
+
+.year-months {
+  display: grid;
+  grid-template-columns: repeat(53, 12px);
+  gap: 4px;
+  min-height: 18px;
+  margin-bottom: 5px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.year-months span {
+  white-space: nowrap;
+}
+
+.overview-revision-note {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .year-cell {
@@ -1220,9 +1237,11 @@ body.theme-dark .year-cell.written.level-3 {
 }
 
 .overview-track div {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(var(--day-count), minmax(4px, 1fr));
   align-items: end;
-  gap: 1px;
+  justify-items: center;
+  gap: 0;
   min-height: 42px;
   border-bottom: 1px solid var(--border);
   overflow: hidden;
@@ -1235,10 +1254,8 @@ body.theme-dark .year-cell.written.level-3 {
 
 .overview-track i {
   display: block;
-  flex: 1 1 0;
-  width: 100%;
-  max-width: 16px;
-  min-width: 1px;
+  width: min(10px, 72%);
+  min-width: 3px;
   border-radius: 2px 2px 0 0;
   background: var(--text);
   opacity: 0.72;
@@ -1260,19 +1277,10 @@ body.theme-dark .year-cell.written.level-3 {
 }
 
 .overview-callout {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   padding-top: 2px;
-}
-
-.overview-callout strong {
-  font-size: 18px;
-  font-weight: 400;
-}
-
-.overview-callout span {
   color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .feed-list {
@@ -1485,6 +1493,11 @@ body.theme-dark .year-cell.written.level-3 {
   .year-grid {
     grid-template-rows: repeat(7, 9px);
     grid-auto-columns: minmax(5px, 1fr);
+    gap: 3px;
+  }
+
+  .year-months {
+    grid-template-columns: repeat(53, minmax(5px, 1fr));
     gap: 3px;
   }
 

@@ -2,11 +2,15 @@ import "./styles.css";
 import JSZip from "jszip";
 import logoDarkUrl from "./assets/logo-dark.svg";
 import logoUrl from "./assets/logo.svg";
+import shareLogoDarkUrl from "./assets/share-logo-dark.svg";
+import shareLogoUrl from "./assets/share-logo.svg";
 import { addBackupJsonFiles, createAnalysisBackupPayload, generateCompressedZip, readBackupPayload } from "./backup";
 import { alignDiffToContent, summarizeDiff } from "./diff";
 import { getTokenStats } from "./tokenizer";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
-import { getOverviewExportBarLayout, overviewExportTrackWidth } from "./overview-layout";
+import { getOverviewExportBarLayout, getOverviewMonthMarkers, getRevisionTotals, overviewExportTrackWidth } from "./overview-layout";
+import { dailyShareLineHeight, getDailyShareLayout } from "./share-card-layout";
+import { layoutShareText, type ShareTextLine } from "./share-text-layout";
 import { canOfferOpfsUpgrade, createTodayPractice, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, getStorageStatus, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistDraftState, persistState, pruneHistoricalEmptyEntries, saveVersion, shouldShowOpfsUpgradePrompt, subscribeStorageStatus, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
 
 const appName = "逐字";
@@ -18,6 +22,16 @@ const themePreferenceKey = "zhuzi-theme-preference-v1";
 const writingYearGoalDays = 365;
 const writingMilestones = [3, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 120, 150, 180, 210, 240, 270, 300, 330, 365];
 const changelog: ChangelogEntry[] = [
+  {
+    version: "0.3.1",
+    date: "2026-07-13",
+    title: "分享图与写作总览",
+    items: [
+      "重构文章分享图与总览图，统一明暗主题、品牌信息和中文文件名。",
+      "优化写作总览的统计口径、时间坐标和最近30天数据展示。",
+      "改进中文分享图换行，避免标点符号单独成行。"
+    ]
+  },
   {
     version: "0.3.0",
     date: "2026-07-13",
@@ -141,11 +155,14 @@ type ThemePreference = "auto" | "light" | "dark";
 type ResolvedTheme = "light" | "dark";
 type SharePalette = {
   bg: string;
+  dailyBg: string;
   cardBg: string;
+  contentBg: string;
   text: string;
   textSoft: string;
   muted: string;
   border: string;
+  divider: string;
   shadow: string;
   pillBg: string;
   success: string;
@@ -188,12 +205,8 @@ type OverviewDay = {
   inserted: number;
   deleted: number;
   churn: number;
-  compression: number | null;
+  finalToInitialRatio: number | null;
 };
-type CardChip =
-  | { kind: "diff"; label: string; inserted: number; deleted: number; width: number }
-  | { kind: "plain"; label: string; value: string; width: number };
-type PositionedCardChip = CardChip & { x: number; y: number };
 
 declare global {
   interface Window {
@@ -392,10 +405,12 @@ app.innerHTML = `
           <span id="overviewGridMeta"></span>
         </div>
         <div class="year-grid" id="overviewYearGrid" aria-label="365 天写作矩阵"></div>
+        <p class="overview-revision-note" id="overviewRevisionNote"></p>
       </section>
       <section class="overview-board">
         <div class="overview-section-head">
           <h3>每日数据</h3>
+          <span id="overviewBarsMeta"></span>
         </div>
         <div class="overview-bars" id="overviewBars"></div>
       </section>
@@ -501,7 +516,9 @@ const exportOverviewImageButton = getElement<HTMLButtonElement>("exportOverviewI
 const overviewSummary = getElement<HTMLElement>("overviewSummary");
 const overviewGridMeta = getElement<HTMLElement>("overviewGridMeta");
 const overviewYearGrid = getElement<HTMLElement>("overviewYearGrid");
+const overviewRevisionNote = getElement<HTMLElement>("overviewRevisionNote");
 const overviewBars = getElement<HTMLElement>("overviewBars");
+const overviewBarsMeta = getElement<HTMLElement>("overviewBarsMeta");
 const historyEditNotice = getElement<HTMLElement>("historyEditNotice");
 const unlockHistoryEditButton = getElement<HTMLButtonElement>("unlockHistoryEditButton");
 const practiceTabs = getElement<HTMLElement>("practiceTabs");
@@ -1407,32 +1424,42 @@ function renderOverview(): void {
   const days = getOverviewDays();
   const writtenDays = days.filter((day) => day.state === "written");
   const elapsedDays = days.filter((day) => day.state !== "future");
+  const chartDays = elapsedDays.slice(-30);
   const absentDays = days.filter((day) => day.state === "absent");
   const articleCount = getWrittenEntries().length;
   const versionTotal = writtenDays.reduce((total, day) => total + day.versions, 0);
   const wordTotal = writtenDays.reduce((total, day) => total + day.wordCount, 0);
   const insertedTotal = writtenDays.reduce((total, day) => total + day.inserted, 0);
   const deletedTotal = writtenDays.reduce((total, day) => total + day.deleted, 0);
-  const averageDailyWords = writtenDays.length ? Math.round(wordTotal / writtenDays.length) : 0;
-  const averageArticleWords = articleCount ? Math.round(wordTotal / articleCount) : 0;
   const averageVersions = writtenDays.length ? (versionTotal / writtenDays.length).toFixed(1) : "0.0";
-  const bestChurnDay = [...writtenDays].sort((left, right) => right.churn - left.churn)[0];
+  const recentBestChurnDay = [...chartDays].sort((left, right) => right.churn - left.churn)[0];
+  const overallBestChurnDay = [...writtenDays].sort((left, right) => right.churn - left.churn)[0];
   const intensityMax = Math.max(...days.map((day) => day.churn), 1);
-  const wordMax = Math.max(...days.map((day) => day.wordCount), 300, 1);
-  const versionMax = Math.max(...days.map((day) => day.versions), 1);
+  const wordMax = Math.max(...chartDays.map((day) => day.wordCount), 300, 1);
+  const versionMax = Math.max(...chartDays.map((day) => day.versions), 1);
+  const chartIntensityMax = Math.max(...chartDays.map((day) => day.churn), 1);
+  const habitStats = getHabitStats();
+  const monthMarkers = getOverviewMonthMarkers(days.map((day) => day.key));
 
-  overviewRange.textContent = `${days[0]?.key ?? todayKey()} 至 ${days.at(-1)?.key ?? todayKey()}`;
+  overviewRange.textContent = `写作年 · ${days[0]?.key ?? todayKey()}—${days.at(-1)?.key ?? todayKey()}`;
   overviewSummary.innerHTML = `
     <div><strong>${writtenDays.length}</strong><span>写作天数</span></div>
     <div><strong>${articleCount}</strong><span>文字篇数</span></div>
-    <div><strong>${elapsedDays.length}</strong><span>已推进天数</span></div>
-    <div><strong>${absentDays.length}</strong><span>缺席天数</span></div>
+    <div><strong>${wordTotal}</strong><span>累计终稿字数</span></div>
     <div><strong>${versionTotal}</strong><span>累计版本</span></div>
-    <div><strong>${averageDailyWords}</strong><span>日均总字数</span></div>
-    <div><strong>${averageArticleWords}</strong><span>篇均终稿字数</span></div>
+    <div><strong>${habitStats.currentStreak}</strong><span>当前连续</span></div>
+    <div><strong>${habitStats.maxStreak}</strong><span>最长连续</span></div>
+    <div><strong>${absentDays.length}</strong><span>缺席天数</span></div>
     <div><strong>${averageVersions}</strong><span>日均版本</span></div>
   `;
-  overviewGridMeta.innerHTML = `${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 ${renderInlineDelta(insertedTotal, deletedTotal)}`;
+  overviewGridMeta.textContent = `${writtenDays.length}/${writingYearGoalDays} 天`;
+  overviewYearGrid.parentElement?.querySelector(".year-months")?.remove();
+  overviewYearGrid.insertAdjacentHTML(
+    "beforebegin",
+    `<div class="year-months" aria-hidden="true">${monthMarkers
+      .map((marker) => `<span style="grid-column: ${marker.column + 1}">${marker.label}</span>`)
+      .join("")}</div>`
+  );
   overviewYearGrid.innerHTML = days
     .map((day, index) => {
       const level = getOverviewLevel(day, intensityMax);
@@ -1440,16 +1467,51 @@ function renderOverview(): void {
       return `<span class="year-cell ${day.state} level-${level}" title="${title}" aria-label="${title}" data-index="${index}"></span>`;
     })
     .join("");
+  overviewRevisionNote.innerHTML = renderOverviewRevisionNote(insertedTotal, deletedTotal);
 
+  overviewBarsMeta.textContent = formatOverviewChartRange(chartDays);
   overviewBars.innerHTML = [
-    renderOverviewBarTrack("日总字数", elapsedDays, wordMax, (day) => day.wordCount, (day) => `${day.wordCount}字 · ${day.articles}篇`),
-    renderOverviewBarTrack("日版本", elapsedDays, versionMax, (day) => day.versions, (day) => `${day.versions}版 · ${day.articles}篇`),
-    renderOverviewBarTrack("日修改量", elapsedDays, intensityMax, (day) => day.churn, (day) => `+${day.inserted} -${day.deleted}`),
+    renderOverviewBarTrack("日终稿字数", chartDays, wordMax, (day) => day.wordCount, (day) => `${day.wordCount}字 · ${day.articles}篇`),
+    renderOverviewBarTrack("日版本", chartDays, versionMax, (day) => day.versions, (day) => `${day.versions}版 · ${day.articles}篇`),
+    renderOverviewBarTrack("版本修改", chartDays, chartIntensityMax, (day) => day.churn, (day) => `+${day.inserted} -${day.deleted}`),
     `<div class="overview-callout">
-      <strong>修改量最高</strong>
-      <span>${bestChurnDay ? `${formatShortDate(bestChurnDay.key)} · ${renderInlineDelta(bestChurnDay.inserted, bestChurnDay.deleted)}` : "保存版本后，这里会出现当日修改量。"}</span>
+      ${renderOverviewPeakNote(recentBestChurnDay, overallBestChurnDay)}
     </div>`
   ].join("");
+}
+
+function renderOverviewRevisionNote(inserted: number, deleted: number): string {
+  if (inserted === 0 && deleted === 0) {
+    return "保存第二个版本后，这里会累计相邻版本之间的新增与删除，不包含初稿写入。";
+  }
+  return `在相邻的已保存版本之间，累计新增 <em class="delta-plus">+${inserted}</em>，累计删除 <em class="delta-minus">-${deleted}</em>；不包含初稿写入。`;
+}
+
+function renderOverviewPeakNote(recentDay: OverviewDay | undefined, overallDay: OverviewDay | undefined): string {
+  if (!overallDay || overallDay.churn === 0) {
+    return "最近30天内保存第二个版本后，这里会显示版本修改最多的一天。";
+  }
+
+  const overallText = `整个写作年内，版本修改最多的是 ${formatChineseShortDate(overallDay.key)}：新增 <em class="delta-plus">+${overallDay.inserted}</em>，删除 <em class="delta-minus">-${overallDay.deleted}</em>。`;
+  if (!recentDay || recentDay.churn === 0) {
+    return `最近30天内没有发生版本修改。<br>${overallText}`;
+  }
+
+  const recentText = `最近30天内，版本修改最多的是 ${formatChineseShortDate(recentDay.key)}：新增 <em class="delta-plus">+${recentDay.inserted}</em>，删除 <em class="delta-minus">-${recentDay.deleted}</em>`;
+  if (recentDay.key === overallDay.key) {
+    return `${recentText}；这也是整个写作年内修改最多的一天。`;
+  }
+  return `${recentText}。<br>${overallText}`;
+}
+
+function formatOverviewChartRange(days: OverviewDay[]): string {
+  const first = days[0];
+  const last = days.at(-1);
+  if (!first || !last) {
+    return "最近 30 天";
+  }
+  const range = first.key === last.key ? formatChineseShortDate(first.key) : `${formatChineseShortDate(first.key)}—${formatChineseShortDate(last.key)}`;
+  return `${range} · 最近 ${days.length} 天`;
 }
 
 function renderOverviewBarTrack(
@@ -1481,24 +1543,29 @@ function renderOverviewBarTrack(
 async function exportOverviewCard(): Promise<void> {
   await document.fonts.ready;
   const palette = getSharePalette();
+  const shareLogo = await loadCanvasImage(getResolvedTheme() === "dark" ? shareLogoDarkUrl : shareLogoUrl);
   const days = getOverviewDays();
   const writtenDays = days.filter((day) => day.state === "written");
   const elapsedDays = days.filter((day) => day.state !== "future");
+  const chartDays = elapsedDays.slice(-30);
   const absentDays = days.filter((day) => day.state === "absent");
   const articleCount = getWrittenEntries().length;
   const versionTotal = writtenDays.reduce((total, day) => total + day.versions, 0);
   const wordTotal = writtenDays.reduce((total, day) => total + day.wordCount, 0);
   const insertedTotal = writtenDays.reduce((total, day) => total + day.inserted, 0);
   const deletedTotal = writtenDays.reduce((total, day) => total + day.deleted, 0);
-  const averageDailyWords = writtenDays.length ? Math.round(wordTotal / writtenDays.length) : 0;
-  const averageArticleWords = articleCount ? Math.round(wordTotal / articleCount) : 0;
   const averageVersions = writtenDays.length ? (versionTotal / writtenDays.length).toFixed(1) : "0.0";
-  const bestChurnDay = [...writtenDays].sort((left, right) => right.churn - left.churn)[0];
+  const recentBestChurnDay = [...chartDays].sort((left, right) => right.churn - left.churn)[0];
+  const overallBestChurnDay = [...writtenDays].sort((left, right) => right.churn - left.churn)[0];
   const intensityMax = Math.max(...days.map((day) => day.churn), 1);
-  const wordMax = Math.max(...elapsedDays.map((day) => day.wordCount), 300, 1);
-  const versionMax = Math.max(...elapsedDays.map((day) => day.versions), 1);
+  const wordMax = Math.max(...chartDays.map((day) => day.wordCount), 300, 1);
+  const versionMax = Math.max(...chartDays.map((day) => day.versions), 1);
+  const chartIntensityMax = Math.max(...chartDays.map((day) => day.churn), 1);
+  const habitStats = getHabitStats();
+  const monthMarkers = getOverviewMonthMarkers(days.map((day) => day.key));
   const scale = 2;
   const width = 1280;
+  const height = 1226;
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   if (!ctx) {
@@ -1509,19 +1576,8 @@ async function exportOverviewCard(): Promise<void> {
   const cardX = 48;
   const cardY = 48;
   const cardW = width - cardX * 2;
-  const cardRadius = 18;
-  const pillY = 892;
-  const pillHeight = 48;
-  const gapAfterPill = 48;
-  const sloganLine1 = `${appName}，${appSlogan}`;
-  const sloganLine2 = appUrl;
-  ctx.font = cardFont(24);
-  const slogan1Width = ctx.measureText(sloganLine1).width;
-  const slogan2Width = ctx.measureText(sloganLine2).width;
-  const sloganLineHeight = 36;
-  const sloganStartY = pillY + pillHeight + gapAfterPill;
-  const bottomPadding = 52;
-  const height = sloganStartY + sloganLineHeight * 2 + bottomPadding;
+  const cardRadius = 30;
+  const innerRight = width - contentX;
 
   canvas.width = width * scale;
   canvas.height = height * scale;
@@ -1543,75 +1599,86 @@ async function exportOverviewCard(): Promise<void> {
   ctx.stroke();
   ctx.fillStyle = palette.text;
   ctx.font = cardFont(38);
-  ctx.fillText("逐字·数据总览", contentX, 104);
+  ctx.fillText("逐字 · 写作总览", contentX, 110);
   ctx.fillStyle = palette.muted;
-  ctx.font = cardFont(24);
-  ctx.fillText(`${days[0]?.key ?? todayKey()} 至 ${days.at(-1)?.key ?? todayKey()}`, contentX, 142);
-  ctx.fillStyle = palette.muted;
-  ctx.font = cardFont(24);
-  ctx.fillText(sloganLine1, (width - slogan1Width) / 2, sloganStartY);
-  ctx.fillText(sloganLine2, (width - slogan2Width) / 2, sloganStartY + sloganLineHeight);
+  ctx.font = cardFont(22);
+  ctx.fillText(`写作年 · ${days[0]?.key ?? todayKey()}—${days.at(-1)?.key ?? todayKey()}`, contentX, 148);
 
   drawOverviewCardStats(ctx, [
     ["写作天数", String(writtenDays.length)],
     ["文字篇数", String(articleCount)],
-    ["已推进天数", String(elapsedDays.length)],
-    ["缺席天数", String(absentDays.length)],
+    ["累计终稿字数", String(wordTotal)],
     ["累计版本", String(versionTotal)],
-    ["日均总字数", String(averageDailyWords)],
-    ["篇均终稿字数", String(averageArticleWords)],
+    ["当前连续", String(habitStats.currentStreak)],
+    ["最长连续", String(habitStats.maxStreak)],
+    ["缺席天数", String(absentDays.length)],
     ["日均版本", averageVersions]
   ], palette);
 
   ctx.fillStyle = palette.text;
   ctx.font = cardFont(26);
-  ctx.fillText("年度格", contentX, 410);
+  ctx.fillText("年度格", contentX, 416);
   ctx.font = cardFont(20);
-  let gridMetaX = contentX + 104;
-  const gridMetaPrefix = `${writtenDays.length}/${writingYearGoalDays} 天 · 修改量 `;
+  const gridMeta = `${writtenDays.length}/${writingYearGoalDays} 天`;
   ctx.fillStyle = palette.muted;
-  ctx.fillText(gridMetaPrefix, gridMetaX, 410);
-  gridMetaX += ctx.measureText(gridMetaPrefix).width;
-  const insertedMeta = `+${insertedTotal}`;
+  ctx.fillText(gridMeta, innerRight - ctx.measureText(gridMeta).width, 416);
+  ctx.fillStyle = palette.muted;
+  ctx.font = cardFont(13);
+  monthMarkers.forEach((marker) => {
+    ctx.fillText(marker.label, contentX + marker.column * 20, 454);
+  });
+  drawOverviewCardGrid(ctx, days, intensityMax, contentX, 470, palette);
+
+  ctx.font = cardFont(18);
+  let revisionNoteX = contentX;
+  const revisionPrefix = "在相邻的已保存版本之间，累计新增 ";
+  const revisionMiddle = "，累计删除 ";
+  const revisionSuffix = "；不包含初稿写入。";
+  ctx.fillStyle = palette.muted;
+  ctx.fillText(revisionPrefix, revisionNoteX, 632);
+  revisionNoteX += ctx.measureText(revisionPrefix).width;
   ctx.fillStyle = palette.success;
-  ctx.fillText(insertedMeta, gridMetaX, 410);
-  gridMetaX += ctx.measureText(insertedMeta).width;
+  ctx.fillText(`+${insertedTotal}`, revisionNoteX, 632);
+  revisionNoteX += ctx.measureText(`+${insertedTotal}`).width;
+  ctx.fillStyle = palette.muted;
+  ctx.fillText(revisionMiddle, revisionNoteX, 632);
+  revisionNoteX += ctx.measureText(revisionMiddle).width;
   ctx.fillStyle = palette.danger;
-  ctx.fillText(` -${deletedTotal}`, gridMetaX, 410);
-  drawOverviewCardGrid(ctx, days, intensityMax, contentX, 438, palette);
+  ctx.fillText(`-${deletedTotal}`, revisionNoteX, 632);
+  revisionNoteX += ctx.measureText(`-${deletedTotal}`).width;
+  ctx.fillStyle = palette.muted;
+  ctx.fillText(revisionSuffix, revisionNoteX, 632);
 
   ctx.fillStyle = palette.text;
   ctx.font = cardFont(26);
-  ctx.fillText("每日数据", contentX, 636);
-  drawOverviewCardTrack(ctx, "日总字数", elapsedDays, wordMax, (day) => day.wordCount, contentX, 680, palette);
-  drawOverviewCardTrack(ctx, "日版本", elapsedDays, versionMax, (day) => day.versions, contentX, 762, palette);
-  drawOverviewCardTrack(ctx, "日修改量", elapsedDays, intensityMax, (day) => day.churn, contentX, 844, palette);
+  ctx.fillText("每日数据", contentX, 686);
+  const chartRange = formatOverviewChartRange(chartDays);
+  ctx.fillStyle = palette.muted;
+  ctx.font = cardFont(18);
+  ctx.fillText(chartRange, innerRight - ctx.measureText(chartRange).width, 686);
+  drawOverviewCardTrack(ctx, "日终稿字数", chartDays, wordMax, (day) => day.wordCount, contentX, 726, palette);
+  drawOverviewCardTrack(ctx, "日版本", chartDays, versionMax, (day) => day.versions, contentX, 808, palette);
+  drawOverviewCardTrack(ctx, "版本修改", chartDays, chartIntensityMax, (day) => day.churn, contentX, 890, palette);
 
-  const pillLabelY = pillY + 31;
-  ctx.fillStyle = palette.text;
-  ctx.font = cardFont(22);
-  ctx.fillText("修改量最高", contentX + 24, pillLabelY);
+  drawOverviewPeakNotes(ctx, recentBestChurnDay, overallBestChurnDay, contentX, 972, palette);
 
-  if (bestChurnDay) {
-    const dateStr = `${formatShortDate(bestChurnDay.key)} · `;
-    const insertedStr = `+${bestChurnDay.inserted}`;
-    const deletedStr = ` -${bestChurnDay.deleted}`;
-    let x = contentX + 156;
-    ctx.fillStyle = palette.textSoft;
-    ctx.fillText(dateStr, x, pillLabelY);
-    x += ctx.measureText(dateStr).width;
-    ctx.fillStyle = palette.success;
-    ctx.fillText(insertedStr, x, pillLabelY);
-    x += ctx.measureText(insertedStr).width;
-    ctx.fillStyle = palette.danger;
-    ctx.fillText(deletedStr, x, pillLabelY);
-  } else {
-    ctx.fillStyle = palette.textSoft;
-    ctx.fillText("保存版本后显示当日修改量", contentX + 156, pillLabelY);
+  const footerDividerY = 1048;
+  ctx.strokeStyle = palette.divider;
+  ctx.beginPath();
+  ctx.moveTo(contentX, footerDividerY);
+  ctx.lineTo(innerRight, footerDividerY);
+  ctx.stroke();
+  ctx.fillStyle = palette.muted;
+  ctx.font = cardFont(21);
+  ctx.fillText(`${appName}，${appSlogan}`, contentX, 1100);
+  ctx.font = cardFont(19);
+  ctx.fillText(appUrl, contentX, 1136);
+  if (shareLogo) {
+    ctx.drawImage(shareLogo, innerRight - 72, 1076, 72, 72);
   }
 
   const link = document.createElement("a");
-  link.download = `zhuzi-overview-${todayKey()}.png`;
+  link.download = `逐字-总览图-${todayKey()}.png`;
   link.href = canvas.toDataURL("image/png");
   link.click();
 }
@@ -1991,7 +2058,7 @@ function getOverviewDays(): OverviewDay[] {
         inserted: 0,
         deleted: 0,
         churn: 0,
-        compression: null
+        finalToInitialRatio: null
       };
     }
 
@@ -2015,13 +2082,13 @@ function getOverviewDayMetrics(key: string): OverviewDay {
       continue;
     }
 
-    const summary = getEntrySummary(entry);
     const firstStats = first.token_stats;
     const finalStats = last.token_stats;
+    const revisionTotals = getRevisionTotals(entry.versions);
     wordCount += finalStats.total_units;
     versions += entry.versions.length;
-    inserted += textInsertCount(summary) + summary.punctuation.insert;
-    deleted += textDeleteCount(summary) + summary.punctuation.delete;
+    inserted += revisionTotals.inserted;
+    deleted += revisionTotals.deleted;
     firstUnits += firstStats.total_units;
     finalUnits += finalStats.total_units;
   }
@@ -2035,7 +2102,7 @@ function getOverviewDayMetrics(key: string): OverviewDay {
     inserted,
     deleted,
     churn: inserted + deleted,
-    compression: firstUnits > 0 ? finalUnits / firstUnits : null
+    finalToInitialRatio: firstUnits > 0 ? finalUnits / firstUnits : null
   };
 }
 
@@ -2058,8 +2125,8 @@ function formatOverviewDayTitle(day: OverviewDay): string {
     return "缺席";
   }
 
-  const compression = day.compression === null ? "—" : `${Math.round(day.compression * 100)}%`;
-  return `${day.articles}篇 · 共${day.wordCount}字 · ${day.versions}版 · +${day.inserted} -${day.deleted} · 压缩率 ${compression}`;
+  const finalRatio = day.finalToInitialRatio === null ? "—" : `${Math.round(day.finalToInitialRatio * 100)}%`;
+  return `${day.articles}篇 · 终稿${day.wordCount}字 · ${day.versions}版 · 版本修改 +${day.inserted} -${day.deleted} · 终稿/初稿 ${finalRatio}`;
 }
 
 function getCalendarRows(): Array<{ key: string; written: boolean }> {
@@ -2154,17 +2221,12 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   await document.fonts.ready;
   const summary = getEntrySummary(entry);
   const palette = getSharePalette();
+  const shareLogo = await loadCanvasImage(getResolvedTheme() === "dark" ? shareLogoDarkUrl : shareLogoUrl);
   const canvas = document.createElement("canvas");
   const scale = 2;
-  const cardWidth = 1040;
-  const cardX = 48;
-  const cardY = 48;
-  const cardInnerX = 112;
-  const cardW = cardWidth - cardX * 2;
-  const contentStartY = 230;
-  const lineHeight = 48;
   const lastStats = last.token_stats;
-  const meterText = `${lastStats.total_units} / 300`;
+  const practiceLabel = getPracticeLabel(entry, getEntriesForDate(entry.date_key));
+  const meterText = `${practiceLabel}  ·  ${lastStats.total_units} / 300`;
   const achievementText = renderShareAchievementText();
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
@@ -2173,80 +2235,101 @@ async function exportDailyCard(entry: DailyEntry): Promise<void> {
   }
 
   measureCtx.font = cardFont(30);
-  const visibleLines = wrapTextPreservingBreaks(measureCtx, last.content || "空白版本", cardW - 96);
-  const contentEndY = contentStartY + Math.max(visibleLines.length - 1, 0) * lineHeight;
-  const chipY = contentEndY + 58;
-  const chipLayout = layoutCardChips(
-    [
-      createDiffCardChip(measureCtx, "文字", textInsertCount(summary), textDeleteCount(summary)),
-      createDiffCardChip(measureCtx, "标点", summary.punctuation.insert, summary.punctuation.delete),
-      createPlainCardChip(measureCtx, "迭代", String(entry.versions.length))
-    ],
-    cardInnerX,
-    chipY,
-    cardW - 96
+  const initialLayout = getDailyShareLayout(1);
+  const visibleLines = layoutShareText(
+    last.content || "空白版本",
+    initialLayout.contentWidth - 64,
+    (text) => measureCtx.measureText(text).width
   );
-  const signatureY = chipY + chipLayout.height + 50;
+  const layout = getDailyShareLayout(visibleLines.length);
   const footerLine1 = `${appName}，${appSlogan}`;
   const footerLine2 = appUrl;
-  const footerLineHeight = 38;
-  const footerStartY = signatureY + 50;
-  const cardH = Math.max(660, footerStartY + footerLineHeight * 2 + 32 - cardY);
-  const cardHeight = cardY + cardH + 48;
-  canvas.width = cardWidth * scale;
-  canvas.height = cardHeight * scale;
+  canvas.width = layout.width * scale;
+  canvas.height = layout.height * scale;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
     return;
   }
 
   ctx.scale(scale, scale);
-  ctx.fillStyle = palette.bg;
-  ctx.fillRect(0, 0, cardWidth, cardHeight);
+  ctx.fillStyle = palette.dailyBg;
+  ctx.fillRect(0, 0, layout.width, layout.height);
   ctx.save();
   ctx.shadowColor = palette.shadow;
   ctx.shadowBlur = 34;
   ctx.shadowOffsetY = 18;
-  roundRect(ctx, cardX, cardY, cardW, cardH, 30);
+  roundRect(ctx, layout.cardX, layout.cardY, layout.cardWidth, layout.cardHeight, 30);
   ctx.fillStyle = palette.cardBg;
   ctx.fill();
   ctx.restore();
   ctx.strokeStyle = palette.border;
   ctx.lineWidth = 2;
-  roundRect(ctx, cardX, cardY, cardW, cardH, 30);
+  roundRect(ctx, layout.cardX, layout.cardY, layout.cardWidth, layout.cardHeight, 30);
   ctx.stroke();
 
   ctx.fillStyle = palette.text;
-  ctx.font = cardFont(34);
-  ctx.fillText(`${formatDisplayDate(entry.date_key)} · ${getPracticeLabel(entry, getEntriesForDate(entry.date_key))}`, cardInnerX, 134);
-  ctx.font = cardFont(28);
+  ctx.font = cardFont(35);
+  ctx.fillText(formatDisplayDate(entry.date_key), layout.innerX, layout.titleY);
+  ctx.font = cardFont(22);
   const meterPaddingX = 24;
   const meterWidth = Math.ceil(ctx.measureText(meterText).width + meterPaddingX * 2);
-  const meterX = cardX + cardW - 48 - meterWidth;
-  drawSoftPill(ctx, meterX, 100, meterWidth, 44, palette);
+  const meterX = layout.innerRight - meterWidth;
+  drawSoftPill(ctx, meterX, layout.meterY, meterWidth, 44, palette);
   ctx.fillStyle = palette.textSoft;
-  ctx.fillText(meterText, meterX + meterPaddingX, 130);
+  ctx.fillText(meterText, meterX + meterPaddingX, layout.meterY + 30);
+
+  roundRect(ctx, layout.contentX, layout.contentY, layout.contentWidth, layout.contentHeight, 18);
+  ctx.fillStyle = palette.contentBg;
+  ctx.fill();
+  ctx.strokeStyle = palette.divider;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
 
   ctx.fillStyle = palette.text;
   ctx.font = cardFont(30);
   visibleLines.forEach((line, index) => {
-    ctx.fillText(line, cardInnerX, contentStartY + index * lineHeight);
+    drawShareTextLine(ctx, line, layout.contentTextX, layout.contentTextY + index * dailyShareLineHeight);
   });
 
-  chipLayout.chips.forEach((chip) => drawCardChip(ctx, chip, palette));
-
-  ctx.fillStyle = palette.text;
-  ctx.font = cardFont(26);
-  ctx.fillText(achievementText, cardInnerX, signatureY);
   ctx.fillStyle = palette.muted;
-  ctx.font = cardFont(24);
-  const footerLine1Width = ctx.measureText(footerLine1).width;
-  const footerLine2Width = ctx.measureText(footerLine2).width;
-  ctx.fillText(footerLine1, (cardWidth - footerLine1Width) / 2, footerStartY);
-  ctx.fillText(footerLine2, (cardWidth - footerLine2Width) / 2, footerStartY + footerLineHeight);
+  ctx.font = cardFont(18);
+  ctx.fillText("初稿 → 终稿", layout.innerX, layout.diffLabelY);
+  drawDailyDiffStrip(
+    ctx,
+    layout.innerX,
+    layout.diffStripY,
+    layout.innerRight - layout.innerX,
+    layout.diffStripHeight,
+    [
+      { label: "文字", inserted: textInsertCount(summary), deleted: textDeleteCount(summary) },
+      { label: "标点", inserted: summary.punctuation.insert, deleted: summary.punctuation.delete },
+      { label: "迭代", value: `${entry.versions.length} 版` }
+    ],
+    palette
+  );
+
+  ctx.strokeStyle = palette.divider;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(layout.innerX, layout.footerDividerY);
+  ctx.lineTo(layout.innerRight, layout.footerDividerY);
+  ctx.stroke();
+
+  ctx.fillStyle = palette.textSoft;
+  ctx.font = cardFont(23);
+  ctx.fillText(achievementText, layout.innerX, layout.achievementY);
+  ctx.fillStyle = palette.muted;
+  ctx.font = cardFont(21);
+  ctx.fillText(footerLine1, layout.innerX, layout.brandY);
+  ctx.font = cardFont(19);
+  ctx.fillText(footerLine2, layout.innerX, layout.urlY);
+
+  if (shareLogo) {
+    ctx.drawImage(shareLogo, layout.logoX, layout.logoY, layout.logoSize, layout.logoSize);
+  }
 
   const link = document.createElement("a");
-  link.download = `char300-daily-card-${entry.date_key}-${slugifyPracticeLabel(entry)}.png`;
+  link.download = `逐字-分享图-${entry.date_key}-${slugifyPracticeLabel(entry)}.png`;
   link.href = canvas.toDataURL("image/png");
   link.click();
 }
@@ -2266,11 +2349,14 @@ function getSharePalette(): SharePalette {
   if (getResolvedTheme() === "dark") {
     return {
       bg: "#ffffff",
+      dailyBg: "#ffffff",
       cardBg: "#1d1b1a",
+      contentBg: "#181716",
       text: "#ebe6dd",
       textSoft: "rgba(235,230,221,0.78)",
       muted: "rgba(235,230,221,0.58)",
       border: "rgba(235,230,221,0.14)",
+      divider: "rgba(235,230,221,0.18)",
       shadow: "rgba(0,0,0,0.38)",
       pillBg: "rgba(255,255,255,0.055)",
       success: "#7fd39a",
@@ -2285,11 +2371,14 @@ function getSharePalette(): SharePalette {
 
   return {
     bg: "#ffffff",
-    cardBg: "#ffffff",
+    dailyBg: "#ffffff",
+    cardBg: "#fcfbf8",
+    contentBg: "#ffffff",
     text: "#1c1c1c",
     textSoft: "rgba(28,28,28,0.72)",
     muted: "rgba(28,28,28,0.56)",
     border: "rgba(28,28,28,0.08)",
+    divider: "rgba(28,28,28,0.12)",
     shadow: "rgba(28,28,28,0.12)",
     pillBg: "rgba(28,28,28,0.035)",
     success: "#287a46",
@@ -2310,73 +2399,123 @@ function drawSoftPill(ctx: CanvasRenderingContext2D, x: number, y: number, width
   ctx.stroke();
 }
 
-function createDiffCardChip(ctx: CanvasRenderingContext2D, label: string, inserted: number, deleted: number): CardChip {
-  ctx.font = cardFont(24);
-  const labelWidth = ctx.measureText(label).width;
-  ctx.font = cardFont(28);
-  const insertedWidth = ctx.measureText(`+${inserted}`).width;
-  const deletedWidth = ctx.measureText(`-${deleted}`).width;
-  const width = Math.ceil(40 + labelWidth + 18 + insertedWidth + 16 + deletedWidth + 20);
-  return { kind: "diff", label, inserted, deleted, width: Math.max(202, width) };
-}
+function drawDailyDiffStrip(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  items: Array<{ label: string; inserted: number; deleted: number } | { label: string; value: string }>,
+  palette = getSharePalette()
+): void {
+  roundRect(ctx, x, y, width, height, 14);
+  ctx.fillStyle = palette.pillBg;
+  ctx.fill();
+  ctx.strokeStyle = palette.divider;
+  ctx.lineWidth = 1;
+  ctx.stroke();
 
-function createPlainCardChip(ctx: CanvasRenderingContext2D, label: string, value: string): CardChip {
-  ctx.font = cardFont(24);
-  const labelWidth = ctx.measureText(label).width;
-  ctx.font = cardFont(28);
-  const valueWidth = ctx.measureText(value).width;
-  const width = Math.ceil(40 + labelWidth + 18 + valueWidth + 20);
-  return { kind: "plain", label, value, width: Math.max(138, width) };
-}
-
-function layoutCardChips(
-  chips: CardChip[],
-  startX: number,
-  startY: number,
-  maxWidth: number
-): { chips: PositionedCardChip[]; height: number } {
-  const gapX = 24;
-  const gapY = 18;
-  const chipHeight = 54;
-  const positioned: PositionedCardChip[] = [];
-  let x = startX;
-  let y = startY;
-
-  for (const chip of chips) {
-    const width = Math.min(chip.width, maxWidth);
-    if (x > startX && x + width > startX + maxWidth) {
-      x = startX;
-      y += chipHeight + gapY;
+  const itemWidth = width / items.length;
+  items.forEach((item, index) => {
+    const itemX = x + index * itemWidth;
+    if (index > 0) {
+      ctx.beginPath();
+      ctx.moveTo(itemX, y + 18);
+      ctx.lineTo(itemX, y + height - 18);
+      ctx.stroke();
     }
 
-    positioned.push({ ...chip, width, x, y });
-    x += width + gapX;
-  }
+    ctx.fillStyle = palette.muted;
+    ctx.font = cardFont(18);
+    ctx.fillText(item.label, itemX + 24, y + 30);
+    ctx.font = cardFont(26);
+    if ("value" in item) {
+      ctx.fillStyle = palette.text;
+      ctx.fillText(item.value, itemX + 24, y + 65);
+      return;
+    }
 
-  return {
-    chips: positioned,
-    height: positioned.length === 0 ? 0 : positioned.at(-1)!.y - startY + chipHeight
-  };
+    const insertedText = `+${item.inserted}`;
+    ctx.fillStyle = palette.success;
+    ctx.fillText(insertedText, itemX + 24, y + 65);
+    ctx.fillStyle = palette.danger;
+    ctx.fillText(`-${item.deleted}`, itemX + 24 + ctx.measureText(insertedText).width + 18, y + 65);
+  });
 }
 
-function drawCardChip(ctx: CanvasRenderingContext2D, chip: PositionedCardChip, palette = getSharePalette()): void {
-  drawSoftPill(ctx, chip.x, chip.y, chip.width, 54, palette);
-  ctx.font = cardFont(24);
-  ctx.fillStyle = palette.muted;
-  ctx.fillText(chip.label, chip.x + 20, chip.y + 35);
-  const valueX = chip.x + 20 + ctx.measureText(chip.label).width + 18;
-  ctx.font = cardFont(28);
-  if (chip.kind === "plain") {
-    ctx.fillStyle = palette.text;
-    ctx.fillText(chip.value, valueX, chip.y + 36);
+async function loadCanvasImage(source: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.addEventListener("load", () => resolve(image), { once: true });
+    image.addEventListener("error", () => resolve(null), { once: true });
+    image.src = source;
+  });
+}
+
+function drawOverviewPeakNotes(
+  ctx: CanvasRenderingContext2D,
+  recentDay: OverviewDay | undefined,
+  overallDay: OverviewDay | undefined,
+  x: number,
+  y: number,
+  palette: SharePalette
+): void {
+  ctx.font = cardFont(18);
+  if (!overallDay || overallDay.churn === 0) {
+    ctx.fillStyle = palette.muted;
+    ctx.fillText("最近30天内保存第二个版本后，这里会显示版本修改最多的一天。", x, y);
     return;
   }
 
-  const insertedText = `+${chip.inserted}`;
+  if (!recentDay || recentDay.churn === 0) {
+    ctx.fillStyle = palette.muted;
+    ctx.fillText("最近30天内没有发生版本修改。", x, y);
+    drawOverviewPeakLine(ctx, overallDay, "整个写作年内，版本修改最多的是 ", x, y + 30, palette, "。");
+    return;
+  }
+
+  if (recentDay.key === overallDay.key) {
+    drawOverviewPeakLine(
+      ctx,
+      recentDay,
+      "最近30天内，版本修改最多的是 ",
+      x,
+      y,
+      palette,
+      "；这也是整个写作年内修改最多的一天。"
+    );
+    return;
+  }
+
+  drawOverviewPeakLine(ctx, recentDay, "最近30天内，版本修改最多的是 ", x, y, palette, "。");
+  drawOverviewPeakLine(ctx, overallDay, "整个写作年内，版本修改最多的是 ", x, y + 30, palette, "。");
+}
+
+function drawOverviewPeakLine(
+  ctx: CanvasRenderingContext2D,
+  day: OverviewDay,
+  scopePrefix: string,
+  x: number,
+  y: number,
+  palette: SharePalette,
+  suffix: string
+): void {
+  const prefix = `${scopePrefix}${formatChineseShortDate(day.key)}：新增 `;
+  const middle = "，删除 ";
+  ctx.fillStyle = palette.muted;
+  ctx.fillText(prefix, x, y);
+  x += ctx.measureText(prefix).width;
   ctx.fillStyle = palette.success;
-  ctx.fillText(insertedText, valueX, chip.y + 36);
+  ctx.fillText(`+${day.inserted}`, x, y);
+  x += ctx.measureText(`+${day.inserted}`).width;
+  ctx.fillStyle = palette.muted;
+  ctx.fillText(middle, x, y);
+  x += ctx.measureText(middle).width;
   ctx.fillStyle = palette.danger;
-  ctx.fillText(`-${chip.deleted}`, valueX + ctx.measureText(insertedText).width + 16, chip.y + 36);
+  ctx.fillText(`-${day.deleted}`, x, y);
+  x += ctx.measureText(`-${day.deleted}`).width;
+  ctx.fillStyle = palette.muted;
+  ctx.fillText(suffix, x, y);
 }
 
 function drawOverviewCardStats(ctx: CanvasRenderingContext2D, stats: Array<[string, string]>, palette = getSharePalette()): void {
@@ -2389,7 +2528,12 @@ function drawOverviewCardStats(ctx: CanvasRenderingContext2D, stats: Array<[stri
   stats.forEach(([label, value], index) => {
     const x = startX + (index % 4) * (itemW + gap);
     const y = startY + Math.floor(index / 4) * (itemH + gap);
-    drawSoftPill(ctx, x, y, itemW, itemH, palette);
+    roundRect(ctx, x, y, itemW, itemH, 14);
+    ctx.fillStyle = palette.pillBg;
+    ctx.fill();
+    ctx.strokeStyle = palette.border;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
     ctx.fillStyle = palette.text;
     ctx.font = cardFont(28);
     ctx.fillText(value, x + 18, y + 36);
@@ -2400,7 +2544,7 @@ function drawOverviewCardStats(ctx: CanvasRenderingContext2D, stats: Array<[stri
 }
 
 function drawOverviewCardGrid(ctx: CanvasRenderingContext2D, days: OverviewDay[], maxChurn: number, x: number, y: number, palette = getSharePalette()): void {
-  const cell = 12;
+  const cell = 16;
   const gap = 4;
   days.forEach((day, index) => {
     const column = Math.floor(index / 7);
@@ -2424,7 +2568,8 @@ function drawOverviewCardTrack(
   const labelW = 118;
   const trackW = overviewExportTrackWidth;
   const count = Math.max(days.length, 1);
-  const { barGap, barWidth: barW } = getOverviewExportBarLayout(count);
+  const { barGap, barWidth: barW, startOffset } = getOverviewExportBarLayout(count);
+  const peakValue = Math.max(...days.map(getValue), 0);
   ctx.fillStyle = palette.muted;
   ctx.font = cardFont(20);
   ctx.fillText(label, x, y + 38);
@@ -2437,8 +2582,8 @@ function drawOverviewCardTrack(
   days.forEach((day, index) => {
     const value = getValue(day);
     const barH = day.state === "future" || value === 0 ? 3 : Math.max(6, Math.round((value / maxValue) * 42));
-    ctx.fillStyle = day.state === "written" ? palette.track : palette.trackMuted;
-    roundRect(ctx, x + labelW + index * (barW + barGap), y + 48 - barH, barW, barH, 2);
+    ctx.fillStyle = value > 0 && value === peakValue ? palette.success : day.state === "written" ? palette.track : palette.trackMuted;
+    roundRect(ctx, x + labelW + startOffset + index * (barW + barGap), y + 48 - barH, barW, barH, 2);
     ctx.fill();
   });
 }
@@ -2455,36 +2600,17 @@ function overviewCellColor(day: OverviewDay, level: number, palette = getSharePa
   return palette.gridLevels[level - 1] ?? palette.success;
 }
 
-function wrapTextPreservingBreaks(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
-  const lines: string[] = [];
-
-  for (const paragraph of text.split(/\r\n|\r|\n/)) {
-    if (paragraph === "") {
-      lines.push("");
-      continue;
-    }
-
-    let current = "";
-    for (const segment of segmentTextForWrapping(paragraph)) {
-      const next = current + segment;
-      if (ctx.measureText(next).width > width && current) {
-        lines.push(current);
-        current = segment;
-      } else {
-        current = next;
-      }
-    }
-
-    if (current) {
-      lines.push(current);
-    }
+function drawShareTextLine(ctx: CanvasRenderingContext2D, line: ShareTextLine, x: number, y: number): void {
+  if (line.tracking === 0) {
+    ctx.fillText(line.text, x, y);
+    return;
   }
 
-  return lines;
-}
-
-function segmentTextForWrapping(text: string): string[] {
-  return text.match(/\s+|[A-Za-z]+|\d+|./gu) ?? [];
+  let cursorX = x;
+  for (const grapheme of Array.from(line.text)) {
+    ctx.fillText(grapheme, cursorX, y);
+    cursorX += ctx.measureText(grapheme).width + line.tracking;
+  }
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number): void {
@@ -2506,6 +2632,11 @@ function formatDisplayDate(key: string): string {
 function formatShortDate(key: string): string {
   const [, month, day] = key.split("-");
   return `${month}/${day}`;
+}
+
+function formatChineseShortDate(key: string): string {
+  const [, month, day] = key.split("-").map(Number);
+  return `${month}月${day}日`;
 }
 
 function formatDateTime(value: string): string {
