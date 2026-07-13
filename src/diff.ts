@@ -1,6 +1,11 @@
 import type { DiffSummary, DiffUnit, TextToken } from "./types";
 import { tokenize } from "./tokenizer.ts";
 
+export type DiffContentSegment = {
+  value: string;
+  op: "KEEP" | "INSERT" | null;
+};
+
 export function diffTexts(previous: string, current: string): DiffUnit[] {
   return diffTokens(tokenize(previous), tokenize(current));
 }
@@ -80,6 +85,44 @@ export function summarizeDiff(previous: string, current: string): DiffSummary {
   }
 
   return summary;
+}
+
+export function alignDiffToContent(content: string, units: DiffUnit[]): DiffContentSegment[] | null {
+  const segments: DiffContentSegment[] = [];
+  let cursor = 0;
+  const appendSegment = (value: string, op: DiffContentSegment["op"]): void => {
+    if (!value) {
+      return;
+    }
+    const previous = segments.at(-1);
+    if (previous?.op === op) {
+      previous.value += value;
+    } else {
+      segments.push({ value, op });
+    }
+  };
+
+  for (const unit of units) {
+    if (unit.op === "DELETE") {
+      continue;
+    }
+
+    const tokenStart = content.indexOf(unit.token.value, cursor);
+    if (tokenStart < 0) {
+      return null;
+    }
+    if (tokenStart > cursor) {
+      appendSegment(content.slice(cursor, tokenStart), null);
+    }
+    appendSegment(unit.token.value, unit.op);
+    cursor = tokenStart + unit.token.value.length;
+  }
+
+  if (cursor < content.length) {
+    appendSegment(content.slice(cursor), null);
+  }
+
+  return segments;
 }
 
 function sameToken(left: TextToken, right: TextToken): boolean {

@@ -595,13 +595,17 @@ function normalizeEntry(entry: DailyEntry): DailyEntry {
     draft: entry.draft ?? entry.lastSavedContent ?? "",
     lastSavedContent: entry.lastSavedContent ?? entry.draft ?? ""
   };
-  const versions = (entry.versions ?? []).map((version, index, versionsList) => ({
-    ...version,
-    token_stats: hasStoredTokenStats(version) ? version.token_stats : getTokenStats(version.content),
-    diff_from_previous: Array.isArray(version.diff_from_previous)
-      ? version.diff_from_previous
-      : diffTexts(versionsList[index - 1]?.content ?? "", version.content)
-  }));
+  const versions = (entry.versions ?? []).map((version, index, versionsList) => {
+    const { diff_summary: analysisDiffSummary, ...storedVersion } = version as Version & { diff_summary?: unknown };
+    void analysisDiffSummary;
+    return {
+      ...storedVersion,
+      token_stats: hasStoredTokenStats(version) ? version.token_stats : getTokenStats(version.content),
+      diff_from_previous: Array.isArray(version.diff_from_previous)
+        ? version.diff_from_previous
+        : diffTexts(versionsList[index - 1]?.content ?? "", version.content)
+    };
+  });
 
   return {
     ...base,

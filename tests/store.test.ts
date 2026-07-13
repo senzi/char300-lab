@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test, { beforeEach } from "node:test";
+import { createAnalysisBackupPayload } from "../src/backup.ts";
+import { diffTexts } from "../src/diff.ts";
 import { getStorageStatus, hasMeaningfulArticleData, loadState, normalizeState, parseImportedState, persistDraftState, persistState, pruneHistoricalEmptyEntries, shouldShowOpfsUpgradePrompt, updateDraft } from "../src/store.ts";
 import { makeEntry, makeLegacyState, makeState, makeVersion } from "./fixtures.ts";
 
@@ -102,6 +104,65 @@ test("wrapped v2 JSON remains importable without changing content", () => {
   assert.ok(imported);
   assert.equal(imported.entries[0].versions[0].content, original.entries[0].versions[0].content);
   assert.equal(imported.entries[0].versions[0].version_id, original.entries[0].versions[0].version_id);
+});
+
+test("analysis JSON restores every source field and rebuilds full diffs", () => {
+  const entryId = "entry-analysis";
+  const first = makeVersion(entryId, 1, "第一行\n第二行。", "2026-07-10T09:00:00.000Z");
+  const second = makeVersion(entryId, 2, "第一行\n修改后的第二行！", "2026-07-10T09:05:00.000Z");
+  first.diff_from_previous = diffTexts("", first.content);
+  second.diff_from_previous = diffTexts(first.content, second.content);
+  const original = makeState([
+    makeEntry({
+      entry_id: entryId,
+      date_key: "2026-07-10",
+      created_at: "2026-07-10T08:55:00.000Z",
+      updated_at: "2026-07-10T09:06:00.000Z",
+      current_version_id: second.version_id,
+      optional_title: "保留标题",
+      versions: [first, second],
+      draft: "未保存的草稿\n也必须保留",
+      lastSavedContent: second.content
+    })
+  ]);
+  const analysisPayload = createAnalysisBackupPayload({
+    app: "逐字",
+    schema_version: 2 as const,
+    exported_at: "2026-07-13T00:00:00.000Z",
+    state: original,
+    preferences: { theme: "dark" }
+  });
+
+  const imported = parseImportedState(analysisPayload);
+  assert.ok(imported);
+  const restored = imported.entries[0];
+  assert.equal(imported.active_entry_id, original.active_entry_id);
+  assert.equal(restored.entry_id, entryId);
+  assert.equal(restored.date_key, "2026-07-10");
+  assert.equal(restored.created_at, "2026-07-10T08:55:00.000Z");
+  assert.equal(restored.updated_at, "2026-07-10T09:06:00.000Z");
+  assert.equal(restored.current_version_id, second.version_id);
+  assert.equal(restored.optional_title, "保留标题");
+  assert.equal(restored.draft, "未保存的草稿\n也必须保留");
+  assert.equal(restored.lastSavedContent, second.content);
+  assert.deepEqual(restored.versions.map(({ version_id, entry_id, content, created_at, token_stats, is_initial }) => ({
+    version_id,
+    entry_id,
+    content,
+    created_at,
+    token_stats,
+    is_initial
+  })), original.entries[0].versions.map(({ version_id, entry_id, content, created_at, token_stats, is_initial }) => ({
+    version_id,
+    entry_id,
+    content,
+    created_at,
+    token_stats,
+    is_initial
+  })));
+  assert.deepEqual(restored.versions[0].diff_from_previous, diffTexts("", first.content));
+  assert.deepEqual(restored.versions[1].diff_from_previous, diffTexts(first.content, second.content));
+  assert.equal("diff_summary" in restored.versions[0], false);
 });
 
 test("bare AppState remains importable", () => {

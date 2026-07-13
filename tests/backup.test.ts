@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import JSZip from "jszip";
-import { generateCompressedZip, isZipBackupFile, readBackupPayload } from "../src/backup.ts";
-import { makeState } from "./fixtures.ts";
+import {
+  addBackupJsonFiles,
+  analysisBackupJsonPath,
+  createAnalysisBackupPayload,
+  fullBackupJsonPath,
+  generateCompressedZip,
+  isZipBackupFile,
+  readBackupPayload
+} from "../src/backup.ts";
+import { makeState, makeSyntheticArchive } from "./fixtures.ts";
 
 function namedBlob(parts: BlobPart[], name: string, type: string): Blob & { name: string; type: string } {
   const blob = new Blob(parts, { type }) as Blob & { name: string; type: string };
@@ -23,6 +31,83 @@ test("current zhuzi-data ZIP remains readable", async () => {
   const bytes = await zip.generateAsync({ type: "uint8array" });
   const file = namedBlob([bytes], "backup.zip", "application/zip");
   assert.deepEqual(await readBackupPayload(file), payload);
+});
+
+test("ZIP export writes unchanged full data plus a restorable analysis JSON", async () => {
+  const payload = { app: "逐字", schema_version: 2 as const, state: makeState() };
+  const zip = new JSZip();
+  addBackupJsonFiles(zip, payload);
+
+  const complete = JSON.parse(await zip.file(fullBackupJsonPath)!.async("string"));
+  const analysis = JSON.parse(await zip.file(analysisBackupJsonPath)!.async("string"));
+  assert.deepEqual(complete, payload);
+  assert.equal(Array.isArray(complete.state.entries[0].versions[0].diff_from_previous), true);
+  assert.equal("diff_from_previous" in analysis.state.entries[0].versions[0], false);
+  assert.equal("diff_summary" in analysis.state.entries[0].versions[0], true);
+
+  const bytes = await zip.generateAsync({ type: "uint8array" });
+  const file = namedBlob([bytes], "dual-format.zip", "application/zip");
+  assert.deepEqual(await readBackupPayload(file), payload);
+});
+
+test("ZIP import prefers the complete payload over the analysis payload", async () => {
+  const completePayload = { app: "逐字", schema_version: 2, marker: "complete", state: makeState() };
+  const analysisPayload = { app: "逐字", schema_version: 2, marker: "analysis", state: makeState() };
+  const zip = new JSZip();
+  zip.file(analysisBackupJsonPath, JSON.stringify(analysisPayload));
+  zip.file(fullBackupJsonPath, JSON.stringify(completePayload));
+  const bytes = await zip.generateAsync({ type: "uint8array" });
+  const file = namedBlob([bytes], "backup.zip", "application/zip");
+  assert.deepEqual(await readBackupPayload(file), completePayload);
+});
+
+test("ZIP import falls back to the analysis payload when complete data is absent", async () => {
+  const analysisPayload = { app: "逐字", schema_version: 2, state: makeState() };
+  const zip = new JSZip();
+  zip.file(analysisBackupJsonPath, JSON.stringify(analysisPayload));
+  const bytes = await zip.generateAsync({ type: "uint8array" });
+  const file = namedBlob([bytes], "analysis-only.zip", "application/zip");
+  assert.deepEqual(await readBackupPayload(file), analysisPayload);
+});
+
+test("ZIP import falls back to analysis when the complete JSON is damaged", async () => {
+  const analysisPayload = { app: "逐字", schema_version: 2, state: makeState() };
+  const zip = new JSZip();
+  zip.file(fullBackupJsonPath, "{damaged");
+  zip.file(analysisBackupJsonPath, JSON.stringify(analysisPayload));
+  const bytes = await zip.generateAsync({ type: "uint8array" });
+  const file = namedBlob([bytes], "recoverable.zip", "application/zip");
+  assert.deepEqual(await readBackupPayload(file), analysisPayload);
+});
+
+test("analysis payload removes full diffs without mutating restorable version data", () => {
+  const state = makeState();
+  state.entries[0].versions[0].content = "第一行\n第二行";
+  const completePayload = { app: "逐字", schema_version: 2 as const, state, preferences: { theme: "auto" } };
+  const before = structuredClone(completePayload);
+
+  const analysisPayload = createAnalysisBackupPayload(completePayload);
+  const version = analysisPayload.state.entries[0].versions[0];
+
+  assert.equal("diff_from_previous" in version, false);
+  assert.equal(version.content, "第一行\n第二行");
+  assert.equal(version.version_id, state.entries[0].versions[0].version_id);
+  assert.equal(version.created_at, state.entries[0].versions[0].created_at);
+  assert.equal(analysisPayload.export_profile, "analysis");
+  assert.deepEqual(analysisPayload.derived_fields_included, { diff_summary: true, full_diff: false });
+  assert.ok(version.diff_summary.han.insert > 0);
+  assert.deepEqual(completePayload, before);
+  assert.equal("diff_from_previous" in completePayload.state.entries[0].versions[0], true);
+});
+
+test("analysis JSON remains substantially smaller than verbose full diff data", () => {
+  const state = makeSyntheticArchive({ days: 8 });
+  const completePayload = { app: "逐字", schema_version: 2 as const, state };
+  const analysisPayload = createAnalysisBackupPayload(completePayload);
+  const fullBytes = new TextEncoder().encode(JSON.stringify(completePayload)).length;
+  const analysisBytes = new TextEncoder().encode(JSON.stringify(analysisPayload)).length;
+
+  assert.ok(analysisBytes < fullBytes * 0.2, `expected analysis JSON under 20% of full JSON, got ${analysisBytes}/${fullBytes}`);
 });
 
 test("legacy char300-lab-data ZIP remains readable", async () => {

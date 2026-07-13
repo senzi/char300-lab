@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { diffTexts, summarizeDiff } from "../src/diff.ts";
+import { alignDiffToContent, diffTexts, summarizeDiff } from "../src/diff.ts";
 
 test("diff reports adjacent token insertion and deletion", () => {
   const result = diffTexts("你好 world。", "你好 improved。 2026");
@@ -32,4 +32,35 @@ test("summary separates text and punctuation changes", () => {
     latin: { insert: 0, delete: 0 },
     punctuation: { insert: 1, delete: 1 }
   });
+});
+
+test("diff display alignment preserves newlines, spaces, and ignored scripts", () => {
+  const previous = "第一行\n第二行";
+  const current = "第一行\n修改后的第二行 العربية";
+  const segments = alignDiffToContent(current, diffTexts(previous, current));
+
+  assert.ok(segments);
+  assert.equal(segments.map((segment) => segment.value).join(""), current);
+  assert.ok(segments.some((segment) => segment.op === null && segment.value.includes("\n")));
+  assert.ok(segments.some((segment) => segment.op === null && segment.value.includes(" العربية")));
+  assert.ok(segments.some((segment) => segment.op === "INSERT"));
+});
+
+test("diff display alignment safely rejects a stale cache", () => {
+  assert.equal(
+    alignDiffToContent("真实正文", [{ op: "INSERT", token: { value: "不存在", kind: "han" } }]),
+    null
+  );
+});
+
+test("diff display alignment merges consecutive inserted tokens for continuous highlighting", () => {
+  const content = "连续新增文字";
+  const segments = alignDiffToContent(content, diffTexts("", content));
+
+  assert.deepEqual(segments, [{ value: content, op: "INSERT" }]);
+});
+
+test("diff display alignment renders content plainly when highlighting is omitted", () => {
+  const content = "初始版本\n保持原样";
+  assert.deepEqual(alignDiffToContent(content, []), [{ value: content, op: null }]);
 });

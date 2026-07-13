@@ -2,8 +2,8 @@ import "./styles.css";
 import JSZip from "jszip";
 import logoDarkUrl from "./assets/logo-dark.svg";
 import logoUrl from "./assets/logo.svg";
-import { generateCompressedZip, readBackupPayload } from "./backup";
-import { summarizeDiff } from "./diff";
+import { addBackupJsonFiles, createAnalysisBackupPayload, generateCompressedZip, readBackupPayload } from "./backup";
+import { alignDiffToContent, summarizeDiff } from "./diff";
 import { getTokenStats } from "./tokenizer";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
 import { getOverviewExportBarLayout, overviewExportTrackWidth } from "./overview-layout";
@@ -18,6 +18,16 @@ const themePreferenceKey = "zhuzi-theme-preference-v1";
 const writingYearGoalDays = 365;
 const writingMilestones = [3, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 120, 150, 180, 210, 240, 270, 300, 330, 365];
 const changelog: ChangelogEntry[] = [
+  {
+    version: "0.3.0",
+    date: "2026-07-13",
+    title: "分析导出与版本阅读",
+    items: [
+      "新增轻量分析 JSON 和可复制的 LLM 分析提示词，完整 ZIP 同时保留完整数据与分析文件。",
+      "优化导出菜单与版本阅读，保留段落换行并改进新增内容高亮。",
+      "继续兼容旧版 ZIP/JSON，轻量分析 JSON 也可导入恢复。"
+    ]
+  },
   {
     version: "0.2.6",
     date: "2026-07-11",
@@ -90,93 +100,40 @@ const changelog: ChangelogEntry[] = [
   }
 ];
 
-const jsonSchemaDescription = `逐字 JSON 备份说明
+const analysisPrompt = `你是一名写作行为分析助手。你将收到“逐字”应用导出的轻量分析 JSON，其中包含多篇练习及其历次版本文本。
 
-用途
-- 这是“完整数据 ZIP”内 zhuzi-data.json 的同一份数据，也可以单独导出为 JSON。
-- 可用于恢复逐字本地档案，也方便导入其他工具展示、统计或编写数据处理脚本。
-- 兼容性优先：字段含义保持稳定；新增字段时，旧导入逻辑应继续忽略不认识的字段。
+分析数据时请遵守以下规则：
 
-顶层结构
-{
-  "app": "逐字",
-  "schema_version": 2,
-  "exported_at": "2026-07-07T00:00:00.000Z",
-  "state": {
-    "entries": [],
-    "active_entry_id": ""
-  },
-  "preferences": {
-    "theme": "auto"
-  }
-}
+* 每个 state.entries 项代表一篇练习；忽略没有保存版本的空练习。
+* 在同一篇练习内，按 versions[].created_at 的时间顺序比较相邻版本。
+* 以 versions[].content 的完整文本为依据；diff_summary 只用于辅助核对增删趋势，不能代替实际文本比较。
+* 只把跨多篇练习反复出现的现象概括为稳定习惯。证据不足时请明确说明，不要用单篇或单次修改推断长期倾向。
 
-顶层字段
-- app: 导出应用名。当前为“逐字”，用于识别数据来源。
-- schema_version: 备份格式版本。当前为 2。
-- exported_at: 导出时间，ISO 8601 字符串。
-- state: 可导入恢复的完整写作档案。
-- preferences: 用户偏好。目前只包含主题设置。
+请分析用户稳定的修改习惯与写作风格，重点关注：
 
-state 字段
-- state.entries: DailyEntry 数组。每一项是一篇每日练习或同日新增练习。
-- state.active_entry_id: 当前选中的 entry_id。导入后会尽量恢复当前位置。
+* 更倾向于删减、扩写、替换措辞，还是重组句段。
+* 经常删除哪些内容，例如重复解释、背景信息、限定语、情绪表达或冗余结论。
+* 经常新增哪些内容，以及新增内容通常用于补充逻辑、明确指代、增加限定、加强论证还是完善收尾。
+* 修改主要发生在词语、句子还是段落层面，属于局部润色还是结构调整。
+* 是否存在先扩写后压缩、反复调整开头或结尾、持续收紧措辞等稳定模式。
 
-DailyEntry 字段
-- entry_id: 练习唯一 ID。
-- date_key: 练习日期，格式通常为 YYYY-MM-DD。
-- created_at: 创建时间，ISO 8601 字符串。
-- updated_at: 更新时间，ISO 8601 字符串。
-- current_version_id: 当前选中的版本 ID；没有保存版本时为 null。
-- optional_title: 显示标题。默认通常等于 date_key。
-- versions: Version 数组，保存每次点击“保存版本”后的完整文本快照。
-- draft: 当前草稿文本，可能尚未保存为版本。
-- lastSavedContent: 最近一次保存版本时的文本。
+再结合各篇练习的最终版本，总结用户今后写作和修改时可长期关注的方向。不要修改、点评或重新输出某篇既有文章，而应提炼跨多篇文本反复出现的共性问题。
 
-Version 字段
-- version_id: 版本唯一 ID。
-- entry_id: 所属练习 ID。
-- content: 该版本的完整正文。
-- created_at: 版本创建时间，ISO 8601 字符串。
-- token_stats: 当前版本的字数/单位统计。
-- diff_from_previous: 与上一个版本相比的 token 级差异。
-- is_initial: 是否为该练习的第一个保存版本。
+输出：
 
-token_stats 字段
-- text_units: 文本单位数，不含标点。
-- punctuation_units: 标点单位数。
-- total_units: 总单位数，包含文本与标点。
-- han_units: 汉字单位数。
-- latin_units: 拉丁字母 token 数。
-- number_units: 数字 token 数。
+## 修改习惯与风格
 
-diff_from_previous 字段
-- op: KEEP、INSERT 或 DELETE。
-- token.value: token 原文。
-- token.kind: han、latin、number 或 punctuation。
+概括用户主要的增、删、替换和结构调整模式。结论应以整体趋势为主，必要时可简要提及版本差异作为依据，但不要展开逐篇案例。
 
-preferences.theme
-- auto: 跟随系统。
-- light: 日间。
-- dark: 夜间。
+## 流畅度建议
 
-自动化获取
-- 推荐做法：先手动使用“JSON 导出”，再把导出的 JSON 文件交给 AI 或脚本处理。
-- 逐字也提供页面内只读 API，不是 HTTP API，适合油猴脚本或已连接到当前页面的浏览器 Agent。
-- 注意：普通 Playwright 新开的浏览器没有用户原 Chrome 里的逐字数据。
-- 自动化脚本需要连接到已有数据的浏览器上下文，或由用户先打开逐字页面（__ZHUZI_ORIGIN__）后再调用 window.zhuzi。
-- getBackupPayload() 返回 JSON 快照对象；exportJson() 返回格式化后的 JSON 字符串。
+用一至两段说明用户今后写作和修改时应重点关注什么，例如语序、句间衔接、指代、节奏、段落过渡或特定句式的使用。建议应面向未来，具体说明“可以多关注什么”和“应减少什么表达方式”。
 
-示例
-const payload = await page.evaluate(() => window.zhuzi.getBackupPayload());
-const json = await page.evaluate(() => window.zhuzi.exportJson());
-const description = await page.evaluate(() => window.zhuzi.getSchemaDescription());
+## 精炼度建议
 
-导入兼容
-- 逐字可以导入完整备份对象，也可以导入裸 AppState，即只包含 entries 和 active_entry_id 的对象。
-- 旧版 char300-lab-data.json 仍通过 ZIP 导入兼容。
-- JSON 备份保留完整档案状态，可能包含尚未写作或尚未保存版本的空练习；做展示或统计时可按 versions.length > 0、draft.trim() 或 lastSavedContent.trim() 自行过滤。
-`;
+用一至两段说明用户今后如何减少重复、无效限定、意义重叠和不必要的解释。建议应面向未来，指出值得保留的表达习惯，以及需要进一步压缩的叙述方式。
+
+所有结论必须依据实际版本变化和终版文本。不要推测用户心理，不要评价观点对错，不要只做字数统计。`;
 
 type View = "write" | "feed" | "overview";
 type DetailMode = "writing" | "version";
@@ -213,6 +170,7 @@ type ZhuziAutomationApi = {
   version: string;
   getBackupPayload: () => BackupPayload;
   exportJson: () => string;
+  getAnalysisPrompt: () => string;
   getSchemaDescription: () => string;
 };
 type ChangelogEntry = {
@@ -288,23 +246,32 @@ app.innerHTML = `
         <div class="export-menu-wrap">
           <button class="button ghost" id="exportButton" type="button" aria-expanded="false">导出</button>
           <div class="export-menu hidden" id="exportMenu">
-            <button id="exportImageButton" type="button">分享图片</button>
-            <button id="exportOverviewImageButton" type="button">总览图片</button>
-            <button id="exportDayMarkdownButton" type="button">当日 Markdown</button>
-            <button id="exportAllMarkdownButton" type="button">全部 Markdown</button>
-            <button id="exportZipButton" type="button">完整数据 ZIP</button>
-            <div class="export-menu-row">
-              <button id="exportJsonButton" type="button">JSON 导出</button>
-              <button class="icon-help-button" id="jsonSchemaButton" type="button" aria-label="查看 JSON 架构说明" title="查看 JSON 架构说明">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="12" cy="12" r="9" />
-                  <path d="M9.5 9a2.7 2.7 0 0 1 5.1 1.2c0 1.8-2.6 2.1-2.6 4" />
-                  <path d="M12 17.5h.01" />
-                </svg>
-              </button>
+            <div class="export-menu-section">
+              <span class="export-menu-label">图片</span>
+              <button id="exportImageButton" type="button">分享图片</button>
+              <button id="exportOverviewImageButton" type="button">总览图片</button>
             </div>
-            <button id="importZipButton" type="button">从 ZIP/JSON 导入</button>
-            <button class="export-menu-upgrade hidden" id="storageUpgradeMenuButton" type="button">升级本地存储</button>
+            <div class="export-menu-section">
+              <span class="export-menu-label">Markdown</span>
+              <button id="exportDayMarkdownButton" type="button">当日 Markdown</button>
+              <button id="exportAllMarkdownButton" type="button">全部 Markdown</button>
+            </div>
+            <div class="export-menu-section">
+              <span class="export-menu-label">数据与恢复</span>
+              <button id="exportZipButton" type="button">完整数据 ZIP</button>
+              <div class="export-menu-row">
+                <button id="exportJsonButton" type="button">轻量分析 JSON</button>
+                <button class="icon-help-button" id="jsonSchemaButton" type="button" aria-label="查看分析提示词" title="查看分析提示词">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M9.5 9a2.7 2.7 0 0 1 5.1 1.2c0 1.8-2.6 2.1-2.6 4" />
+                    <path d="M12 17.5h.01" />
+                  </svg>
+                </button>
+              </div>
+              <button class="export-menu-import" id="importZipButton" type="button">从 ZIP/JSON 导入</button>
+              <button class="export-menu-upgrade hidden" id="storageUpgradeMenuButton" type="button">升级本地存储</button>
+            </div>
           </div>
         </div>
       </div>
@@ -492,11 +459,11 @@ app.innerHTML = `
   <div class="notice-backdrop hidden" id="jsonSchemaDialog" role="dialog" aria-modal="true" aria-labelledby="jsonSchemaTitle">
     <section class="notice-dialog json-schema-dialog">
       <p class="panel-kicker">JSON</p>
-      <h2 id="jsonSchemaTitle">JSON 架构说明</h2>
+      <h2 id="jsonSchemaTitle">LLM 分析提示词</h2>
       <pre class="json-schema-content" id="jsonSchemaContent"></pre>
       <p class="inline-status hidden" id="jsonSchemaStatus"></p>
       <div class="notice-actions">
-        <button class="button ghost" id="jsonSchemaCopyButton" type="button">复制全文</button>
+        <button class="button ghost" id="jsonSchemaCopyButton" type="button">复制提示词</button>
         <button class="button primary" id="jsonSchemaCloseButton" type="button">关闭</button>
       </div>
     </section>
@@ -575,7 +542,7 @@ const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let themePreference = loadThemePreference();
 let storageDialogMode: StorageDialogMode = "notice";
 
-jsonSchemaContent.textContent = getJsonSchemaDescription();
+jsonSchemaContent.textContent = getAnalysisPrompt();
 installAutomationApi();
 applyThemePreference();
 subscribeStorageStatus(refreshStorageHealthLight);
@@ -1091,21 +1058,41 @@ function showImportConfirm(): void {
 function showJsonSchemaDialog(): void {
   jsonSchemaStatus.classList.add("hidden");
   jsonSchemaStatus.textContent = "";
-  jsonSchemaContent.textContent = getJsonSchemaDescription();
+  jsonSchemaContent.textContent = getAnalysisPrompt();
   jsonSchemaDialog.classList.remove("hidden");
 }
 
 async function copyJsonSchemaDescription(): Promise<void> {
   try {
-    await navigator.clipboard.writeText(getJsonSchemaDescription());
-    showJsonSchemaStatus("已复制 JSON 说明全文。", "info");
+    await copyText(getAnalysisPrompt());
+    showJsonSchemaStatus("已复制分析提示词，请同时上传轻量分析 JSON。", "info");
   } catch {
     showJsonSchemaStatus("复制失败，可以手动选中说明文本复制。", "error");
   }
 }
 
-function getJsonSchemaDescription(): string {
-  return jsonSchemaDescription.replaceAll("__ZHUZI_ORIGIN__", window.location.origin);
+async function copyText(value: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value);
+    return;
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.append(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    if (!copied) {
+      throw new Error("Clipboard unavailable");
+    }
+  }
+}
+
+function getAnalysisPrompt(): string {
+  return analysisPrompt;
 }
 
 function showJsonSchemaStatus(message: string, tone: "error" | "info"): void {
@@ -1324,14 +1311,14 @@ function renderReader(entry: DailyEntry): void {
     reader.innerHTML = "";
     return;
   }
+  const displayDiff = selected.is_initial ? [] : selected.diff_from_previous;
 
-  const visibleUnits = selected.diff_from_previous.filter((unit) => unit.op !== "DELETE");
   reader.innerHTML = `
     <div class="reader-meta">
       <span>${selected.is_initial ? "初始版本" : "相邻版本 Diff"}</span>
       <span>${formatDateTime(selected.created_at)}</span>
     </div>
-    <div class="reader-content">${renderDiffUnits(visibleUnits)}</div>
+    <div class="reader-content">${renderVersionContent(selected.content, displayDiff)}</div>
   `;
 }
 
@@ -1660,17 +1647,18 @@ function installAutomationApi(): void {
   Object.defineProperty(window, "zhuzi", {
     configurable: true,
     value: Object.freeze({
-      version: "1",
+      version: "2",
       getBackupPayload: createBackupPayloadSnapshot,
-      exportJson: () => JSON.stringify(createBackupPayload(), null, 2),
-      getSchemaDescription: getJsonSchemaDescription
+      exportJson: () => JSON.stringify(createAnalysisBackupPayload(createBackupPayload()), null, 2),
+      getAnalysisPrompt,
+      getSchemaDescription: getAnalysisPrompt
     } satisfies ZhuziAutomationApi)
   });
 }
 
 function exportJsonBackup(): void {
-  const payload = createBackupPayload();
-  downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" }), `逐字-数据-${todayKey()}.json`);
+  const payload = createAnalysisBackupPayload(createBackupPayload());
+  downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" }), `逐字-analysis-${todayKey()}.json`);
 }
 
 async function exportZipBackup(): Promise<void> {
@@ -1678,7 +1666,7 @@ async function exportZipBackup(): Promise<void> {
   const writtenEntries = getWrittenEntries();
   const payload = createBackupPayload();
 
-  zip.file("zhuzi-data.json", JSON.stringify(payload, null, 2));
+  addBackupJsonFiles(zip, payload);
   zip.file("markdown/all.md", [`# 逐字`, "", appSlogan, "", `导出时间：${payload.exported_at}`, "", ...writtenEntries.map(renderEntryMarkdown)].join("\n"));
 
   for (const entry of writtenEntries) {
@@ -2113,15 +2101,20 @@ function toLocalDateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function renderDiffUnits(units: DiffUnit[]): string {
-  if (units.length === 0) {
+function renderVersionContent(content: string, units: DiffUnit[]): string {
+  if (content.length === 0) {
     return `<span class="muted">空白版本</span>`;
   }
 
-  return units
-    .map((unit) => {
-      const value = escapeHtml(unit.token.value);
-      return unit.op === "INSERT" ? `<mark>${value}</mark>` : `<span>${value}</span>`;
+  const segments = alignDiffToContent(content, units);
+  if (!segments) {
+    return escapeHtml(content);
+  }
+
+  return segments
+    .map((segment) => {
+      const value = escapeHtml(segment.value);
+      return segment.op === "INSERT" ? `<mark>${value}</mark>` : `<span>${value}</span>`;
     })
     .join("");
 }

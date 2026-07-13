@@ -12,9 +12,12 @@ test("edited synthetic archives contain deterministic non-zero changes after V1"
   for (const entry of left.entries) {
     assert.equal(entry.versions.length, 5);
     assert.ok(entry.versions[0].diff_from_previous.some((unit) => unit.op === "INSERT"));
+    const initialLineBreaks = entry.versions[0].content.match(/\n/g)?.length ?? 0;
+    assert.ok(initialLineBreaks >= 3);
     for (const version of entry.versions.slice(1)) {
       assert.ok(version.diff_from_previous.some((unit) => unit.op !== "KEEP"));
       assert.deepEqual(version.token_stats, getTokenStats(version.content));
+      assert.equal(version.content.match(/\n/g)?.length ?? 0, initialLineBreaks);
     }
   }
 });

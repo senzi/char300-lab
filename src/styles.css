@@ -27,6 +27,7 @@
   --danger-bg-soft: rgba(155, 52, 40, 0.07);
   --success: #287a46;
   --success-bg: rgba(40, 122, 70, 0.16);
+  --diff-insert-bg: rgba(218, 190, 54, 0.3);
   --shadow: rgba(0, 0, 0, 0.1) 0 4px 12px;
   --button-shadow: rgba(0, 0, 0, 0.05) 0 1px 2px;
   --button-inset: rgba(0, 0, 0, 0.2) 0 0 0 0.5px inset;
@@ -66,6 +67,7 @@ body.theme-dark {
   --danger-bg-soft: rgba(255, 139, 124, 0.1);
   --success: #7fd39a;
   --success-bg: rgba(127, 211, 154, 0.16);
+  --diff-insert-bg: rgba(232, 187, 68, 0.34);
   --shadow: rgba(0, 0, 0, 0.32) 0 8px 22px;
   --button-shadow: rgba(0, 0, 0, 0.22) 0 1px 2px;
   --button-inset: rgba(255, 255, 255, 0.12) 0 0 0 0.5px inset;
@@ -192,35 +194,58 @@ h3 {
   top: calc(100% + 8px);
   right: 0;
   display: grid;
-  min-width: 180px;
-  gap: 4px;
+  width: min(264px, calc(100vw - 24px));
+  gap: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px;
+  border-radius: 10px;
+  padding: 8px;
   background: var(--bg);
   box-shadow: var(--shadow);
 }
 
+.export-menu-section {
+  display: grid;
+  gap: 3px;
+  padding: 5px 0;
+}
+
+.export-menu-section + .export-menu-section {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.export-menu-label {
+  padding: 0 10px 4px;
+  color: var(--muted-soft);
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+}
+
 .export-menu button {
+  box-sizing: border-box;
+  height: 36px;
   border: 0;
   border-radius: 6px;
   padding: 8px 10px;
   color: var(--text);
   background: transparent;
   text-align: left;
+  white-space: nowrap;
 }
 
 .export-menu-row {
   display: grid;
-  grid-template-columns: 1fr 34px;
+  grid-template-columns: minmax(0, 1fr) 36px;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
 .export-menu .icon-help-button {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   place-items: center;
   padding: 0;
 }
@@ -242,12 +267,18 @@ h3 {
 }
 
 .export-menu .export-menu-upgrade {
-  margin-top: 4px;
+  margin-top: 3px;
   border-top: 1px solid var(--border);
   border-radius: 0 0 6px 6px;
   padding-top: 12px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.export-menu .export-menu-import {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 6px 6px;
 }
 
 .date-title {
@@ -979,10 +1010,12 @@ h3 {
 }
 
 mark {
-  border-radius: 4px;
-  padding: 0 2px;
-  background: var(--success-bg);
+  border-radius: 3px;
+  padding: 0 0.08em;
+  background: linear-gradient(180deg, transparent 9%, var(--diff-insert-bg) 9%, var(--diff-insert-bg) 91%, transparent 91%);
   color: var(--text);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .diff-summary {
@@ -1422,6 +1455,11 @@ body.theme-dark .year-cell.written.level-3 {
   .app-footer {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .export-menu {
+    right: auto;
+    left: 0;
   }
 
   .theme-inline {

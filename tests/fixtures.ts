@@ -209,11 +209,17 @@ export function makeEditedSyntheticArchive(options: {
 
 function createSyntheticDraft(targetUnits: number, random: () => number, salt: number): string {
   const chars: string[] = [];
+  let nextParagraphAt = 48 + Math.floor(random() * 45);
   for (let index = 0; index < targetUnits; index += 1) {
     if (index > 0 && index % (18 + (salt % 7)) === 0) {
       chars.push(syntheticPunctuation[Math.floor(random() * syntheticPunctuation.length)]);
     }
     chars.push(syntheticHan[Math.floor(random() * syntheticHan.length)]);
+    if (index + 1 >= nextParagraphAt && index + 1 < targetUnits) {
+      chars.push("。");
+      chars.push(random() < 0.2 ? "\n" : "\n\n");
+      nextParagraphAt += 48 + Math.floor(random() * 45);
+    }
   }
   chars.push("。");
   return chars.join("");
@@ -225,7 +231,8 @@ function editSyntheticDraft(input: string, random: () => number): string {
 
   for (let operation = 0; operation < operations; operation += 1) {
     const kind = Math.floor(random() * 4);
-    const index = Math.floor(random() * Math.max(chars.length, 1));
+    const editableIndexes = chars.flatMap((char, index) => (char === "\n" ? [] : [index]));
+    const index = editableIndexes[Math.floor(random() * Math.max(editableIndexes.length, 1))] ?? 0;
     if (kind === 0) {
       chars.splice(index, 0, syntheticHan[Math.floor(random() * syntheticHan.length)]);
     } else if (kind === 1 && chars.length > 260) {

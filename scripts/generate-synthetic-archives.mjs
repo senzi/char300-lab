@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
-import { generateCompressedZip } from "../src/backup.ts";
+import { addBackupJsonFiles, generateCompressedZip } from "../src/backup.ts";
 import { makeEditedSyntheticArchive } from "../tests/fixtures.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -34,7 +34,7 @@ for (const profile of profiles) {
   };
   const json = JSON.stringify(payload, null, 2);
   const zip = new JSZip();
-  zip.file("zhuzi-data.json", json);
+  addBackupJsonFiles(zip, payload);
   zip.file(
     "README.txt",
     [
@@ -43,7 +43,7 @@ for (const profile of profiles) {
       `日期：${state.entries.map((entry) => entry.date_key).sort()[0]} 至 ${endDate}`,
       `练习：${state.entries.length} 篇`,
       `版本：${state.entries.reduce((total, entry) => total + entry.versions.length, 0)} 个`,
-      "正文和每版编辑均由固定随机种子生成，不包含任何真实用户内容。",
+      "正文、段落换行和每版编辑均由固定随机种子生成，不包含任何真实用户内容。",
       "导入会替换当前浏览器档案，请先导出自己的完整备份。"
     ].join("\n")
   );
