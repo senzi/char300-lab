@@ -1102,6 +1102,37 @@ mark {
   color: var(--muted);
 }
 
+.overview-hero-meta {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.overview-year-switch {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.overview-year-switch button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.overview-year-switch button.active {
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--bg);
+}
+
 .overview-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1172,6 +1203,34 @@ mark {
   margin: 12px 0 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.overview-year-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.overview-year-summary button {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px;
+  background: var(--subtle-faint);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.overview-year-summary span,
+.overview-year-summary small {
+  color: var(--muted);
+}
+
+.overview-year-summary strong {
+  font-size: 20px;
+  font-weight: 400;
 }
 
 .year-cell {
@@ -1488,6 +1547,18 @@ body.theme-dark .year-cell.written.level-3 {
 
   .overview-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-hero-meta {
+    align-items: flex-start;
+  }
+
+  .overview-year-switch {
+    justify-content: flex-start;
+  }
+
+  .overview-year-summary {
+    grid-template-columns: 1fr;
   }
 
   .year-grid {
